@@ -1,0 +1,14 @@
+{
+  "tv": [
+    {
+      "name": "IPTV-Brazuka",
+      "url": "https://raw.githubusercontent.com/xKzin/IPTV-Brazuka/main/IPTV-Brazuka.m3u",
+      "priority": 1
+    },
+    {
+      "name": "IPTV-Brazuka2",
+      "url": "https://raw.githubusercontent.com/xKzin/IPTV-Brazuka/main/IPTV-Brazuka2.m3u",
+      "priority": 2
+    }
+  ]
+}
