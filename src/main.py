@@ -12,7 +12,7 @@ def main():
     config_path = os.path.join(base_dir, "..", "config", "sources.json")
     
     with open(config_path, "r", encoding="utf-8") as f:
-        fontes = json.load(f)["tv"]
+        fontes = sorted(json.load(f)["tv"], key=lambda x: x.get("priority", 999))
     
     lista_bruta = []
     

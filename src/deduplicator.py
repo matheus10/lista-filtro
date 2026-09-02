@@ -12,8 +12,8 @@ def deduplicar_canais(lista_normalizada):
         canal_existente = canais_principais[fp]
         if canal["url"] == canal_existente["url"]:
             continue
-            
-        if canal["priority"] < canal_existente["priority"]:
+
+        if _tem_prioridade_maior(canal, canal_existente):
             _transformar_em_backup(canal_existente, contagem_backups, canais_finais)
             canais_principais[fp] = canal
         else:
@@ -21,6 +21,16 @@ def deduplicar_canais(lista_normalizada):
 
     canais_finais.update(canais_principais)
     return list(canais_finais.values())
+
+def _eh_brazuka3(canal):
+    return "brazuka3" in str(canal.get("source", "")).lower()
+
+def _tem_prioridade_maior(candidato, atual):
+    if _eh_brazuka3(candidato) and not _eh_brazuka3(atual):
+        return True
+    if _eh_brazuka3(atual) and not _eh_brazuka3(candidato):
+        return False
+    return candidato.get("priority", 999) < atual.get("priority", 999)
 
 def _transformar_em_backup(canal, contagem_backups, dict_finais):
     fp_original = canal["fingerprint"]
