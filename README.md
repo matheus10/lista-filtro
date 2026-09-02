@@ -14,6 +14,8 @@ Todas abrem como **texto puro** (`text/plain`), não como player de vídeo.
 
 Cole a URL no player IPTV (IPTV Smarters, TiviMate, VLC, etc.) ou abra no navegador para ver o M3U em linhas (`#EXTM3U`, `#EXTINF`, URL).
 
+As URLs **não mudam**. Cada atualização **sobrescreve** os mesmos três arquivos no Firebase Hosting (`lista.m3u`, `lista-canal.m3u`, `lista-filme.m3u`). Não é criado arquivo novo nem URL nova.
+
 ## Atualização automática
 
 O workflow **Atualizador de Listas IPTV (M3U)** roda a cada 6 horas e também pode ser disparado em **Actions → Run workflow**.

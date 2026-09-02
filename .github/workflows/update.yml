@@ -27,6 +27,7 @@ jobs:
           cd src
           python main.py
 
+      # Publica no canal live: os mesmos caminhos (lista.m3u etc.) sao sobrescritos; URLs nao mudam.
       - name: Deploy no Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
@@ -34,6 +35,7 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           channelId: live
           projectId: minha-lista-c880d
+
 
       - name: Verificar se as listas saem como texto puro
         run: |

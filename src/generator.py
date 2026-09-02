@@ -1,5 +1,12 @@
 import os
 
+# Nomes oficiais no Hosting. Sempre os mesmos caminhos/URLs; cada update sobrescreve.
+ARQUIVOS_M3U = (
+    ("tv", "lista-canal.m3u"),
+    ("vod", "lista-filme.m3u"),
+    ("completa", "lista.m3u"),
+)
+
 def gerar_arquivo_m3u(lista_canais, caminho_saida):
     os.makedirs(os.path.dirname(caminho_saida), exist_ok=True)
     with open(caminho_saida, 'w', encoding='utf-8') as f:
@@ -13,12 +20,8 @@ def gerar_arquivo_m3u(lista_canais, caminho_saida):
             f.write(f'{canal["url"]}\n')
 
 def exportar_listas(dicionario_organizado, diretorio_saida="output"):
-    arquivos = [
-        ("tv", "lista-canal.m3u"),
-        ("vod", "lista-filme.m3u"),
-        ("completa", "lista.m3u")
-    ]
-    for chave, nome_arquivo in arquivos:
+    os.makedirs(diretorio_saida, exist_ok=True)
+    for chave, nome_arquivo in ARQUIVOS_M3U:
         caminho = os.path.join(diretorio_saida, nome_arquivo)
         gerar_arquivo_m3u(dicionario_organizado[chave], caminho)
-    print(f"Arquivos gerados no diretório '{diretorio_saida}/'")
+        print(f"Sobrescrito: {caminho}")

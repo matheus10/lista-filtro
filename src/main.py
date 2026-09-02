@@ -42,7 +42,7 @@ def main():
         diretorio_saida = next((p for p in candidatos if os.path.isdir(p)), candidatos[-1])
 
     exportar_listas(dicionario_organizado, diretorio_saida)
-    print(f"Arquivos gravados na pasta public do Hosting: {diretorio_saida}")
+    print(f"Sobrescritos na pasta public (URLs fixas): {diretorio_saida}")
 
 if __name__ == "__main__":
     main()
