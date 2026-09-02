@@ -420,7 +420,7 @@ def _deve_remover(historico: List[Verdict]) -> bool:
     return historico[-1] == "dead"
 
 
-def filtrar_canais_ativos(canais: List[dict]) -> List[dict]:
+def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
     timeout_s = float(os.environ.get("VALIDATE_TIMEOUT_SEC", "10"))
     fast_timeout = float(os.environ.get("VALIDATE_FAST_TIMEOUT_SEC", "3"))
     tcp_timeout = float(os.environ.get("VALIDATE_TCP_TIMEOUT_SEC", "2"))
@@ -465,9 +465,19 @@ def filtrar_canais_ativos(canais: List[dict]) -> List[dict]:
 
     print(f"TV: {len(http_urls)} URLs unicas para probe (principais).")
 
+    resumo_vazio = {
+        "tv_vivos": 0,
+        "tv_incertos": 0,
+        "tv_removidos": 0,
+        "vod_intactos": len(vod_canais),
+    }
+
     if not http_urls:
         print("Nenhuma URL http(s) de TV para validar.")
-        return (alvo + backups + vod_canais) if tv_only else canais
+        lista = (alvo + backups + vod_canais) if tv_only else canais
+        n_tv = sum(1 for c in lista if c.get("tipo") != "VOD")
+        resumo_vazio["tv_incertos"] = n_tv
+        return lista, resumo_vazio
 
     historico: Dict[str, List[Verdict]] = {u: [] for u in http_urls}
     status: Dict[str, Verdict] = {}
@@ -603,4 +613,10 @@ def filtrar_canais_ativos(canais: List[dict]) -> List[dict]:
         f"Validacao TV concluida: {vivos} vivos + {mantidos_incertos} mantidos sem certeza, "
         f"{inativos} inativos removidos; VOD intacto={len(vod_canais)}."
     )
-    return mantidos + vod_canais
+    resumo = {
+        "tv_vivos": vivos,
+        "tv_incertos": mantidos_incertos,
+        "tv_removidos": inativos,
+        "vod_intactos": len(vod_canais),
+    }
+    return mantidos + vod_canais, resumo

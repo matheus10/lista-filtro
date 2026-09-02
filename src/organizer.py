@@ -1,3 +1,5 @@
+import re
+
 def organizar_por_tipo(lista_deduplicada):
     canais_tv = []
     canais_vod = []
@@ -16,3 +18,19 @@ def organizar_por_tipo(lista_deduplicada):
         "vod": canais_vod,
         "completa": canais_tv + canais_vod
     }
+
+
+def contar_filmes_series(canais_vod):
+    """Heuristica: grupo/nome com serie/temporada conta como serie; o resto e filme."""
+    filmes = 0
+    series = 0
+    for canal in canais_vod:
+        texto = f"{canal.get('group_title', '')} {canal.get('nome_exibicao', '')} {canal.get('nome_base', '')}".lower()
+        eh_serie = bool(re.search(r"[sS]\d{2}[eE]\d{2}", texto)) or any(
+            t in texto for t in ("série", "serie", "season", "temporada")
+        )
+        if eh_serie:
+            series += 1
+        else:
+            filmes += 1
+    return filmes, series
