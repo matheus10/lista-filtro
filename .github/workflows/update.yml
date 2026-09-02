@@ -40,16 +40,23 @@ jobs:
       - name: Verificar se as listas saem como texto puro
         run: |
           sleep 15
+          set +e
           for arquivo in lista.m3u lista-canal.m3u lista-filme.m3u; do
             cabecalhos=$(curl -sI "https://minha-lista-c880d.web.app/${arquivo}")
-            tipo=$(echo "$cabecalhos" | grep -i '^content-type:' | tr -d '\r')
+            tipo=$(printf '%s\n' "$cabecalhos" | grep -i '^content-type:' | tr -d '\r')
             echo "${arquivo}: ${tipo}"
-            echo "${tipo}" | grep -qi 'text/plain' || {
-              echo "ERRO: ${arquivo} nao esta como text/plain (o navegador abriria player)."
-              exit 1
-            }
-            echo "$cabecalhos" | grep -i '^cache-control:' | grep -qi 'no-store' && {
-              echo "ERRO: ${arquivo} ainda tem no-store (a leitura pode ser cortada)."
-              exit 1
-            }
+            case "$tipo" in
+              *text/plain*) ;;
+              *)
+                echo "ERRO: ${arquivo} nao esta como text/plain (o navegador abriria player)."
+                exit 1
+                ;;
+            esac
+            cache=$(printf '%s\n' "$cabecalhos" | grep -i '^cache-control:' | tr -d '\r')
+            case "$cache" in
+              *no-store*)
+                echo "ERRO: ${arquivo} ainda tem no-store (a leitura pode ser cortada)."
+                exit 1
+                ;;
+            esac
           done
