@@ -35,7 +35,7 @@ import requests
 from requests.adapters import HTTPAdapter
 import urllib3
 
-from deduplicator import _chave_dedup, _eh_brazuka3, _ordem, escolher_par_ativo
+from deduplicator import _chave_dedup, _ordem, escolher_par_ativo
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -484,11 +484,7 @@ def _proxima_url(grupo: List[dict], status: Dict[str, Verdict]) -> Optional[str]
 
     vivos = [c for c in grupo if veredito(c) == "alive"]
     incertos = [c for c in grupo if veredito(c) == "uncertain"]
-    principal = next((c for c in vivos if _eh_brazuka3(c)), None)
-    if principal is None:
-        principal = next((c for c in incertos if _eh_brazuka3(c)), None)
-    if principal is None and vivos:
-        principal = vivos[0]
+    principal = vivos[0] if vivos else None
     if principal is None and incertos:
         principal = incertos[0]
 

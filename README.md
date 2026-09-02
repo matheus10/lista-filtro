@@ -25,4 +25,4 @@ Os headers do Hosting ficam em `firebase.json` (`text/plain`, sem `no-store`) pa
 Antes do deploy, o workflow **valida de verdade** se o stream abre (HLS até o segmento / dados reais no TS), com limite por servidor, retry e uma segunda passagem nos inativos para reduzir falso negativo. Só então os canais mortos saem da lista e o Firebase é atualizado.
 
 
-Fontes: IPTV-Brazuka / Brazuka2 / **Brazuka3** (prioridade nos canais ao vivo) e, de [Iptv-Brasil-2026](https://github.com/xKzin/Iptv-Brasil-2026), as listas **completas CanaisBR01–BR04** mais **Filmes-Series**.
+Fontes (uma por servidor): **CanaisBR01** (prioridade nos canais ao vivo, `up.kiwi`), Brazuka3, Brazuka, **CanaisBR02** e **Filmes-Series**. Brazuka2, BR03 e BR04 saíram porque repetiam o mesmo host.

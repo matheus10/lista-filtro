@@ -62,7 +62,7 @@ def deduplicar_canais(lista_normalizada):
 
 
 def escolher_par_ativo(canais_tv, veredito_de):
-    """Depois do teste: principal (Brazuka3/vivo) + 1 backup vivo de outro host."""
+    """Depois do teste: principal (menor priority / vivo) + 1 backup vivo de outro host."""
     grupos = defaultdict(list)
     for canal in canais_tv:
         grupos[_chave_dedup(canal)].append(canal)
@@ -87,11 +87,7 @@ def escolher_par_ativo(canais_tv, veredito_de):
             else:
                 incertos.append(canal)
 
-        principal = next((c for c in vivos if _eh_brazuka3(c)), None)
-        if principal is None:
-            principal = next((c for c in incertos if _eh_brazuka3(c)), None)
-        if principal is None and vivos:
-            principal = vivos[0]
+        principal = vivos[0] if vivos else None
         if principal is None and incertos:
             principal = incertos[0]
         if principal is None:
@@ -203,21 +199,12 @@ def _host(url):
         return ""
 
 
-def _eh_brazuka3(canal):
-    return "brazuka3" in str(canal.get("source", "")).lower()
-
-
 def _tem_prioridade_maior(candidato, atual):
-    if _eh_brazuka3(candidato) and not _eh_brazuka3(atual):
-        return True
-    if _eh_brazuka3(atual) and not _eh_brazuka3(candidato):
-        return False
     return candidato.get("priority", 999) < atual.get("priority", 999)
 
 
 def _ordem(canal):
     return (
-        0 if _eh_brazuka3(canal) else 1,
         canal.get("priority", 999),
         -qualidade_rank(canal.get("qualidade")),
     )
