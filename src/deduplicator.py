@@ -4,23 +4,29 @@ def deduplicar_canais(lista_normalizada):
     contagem_backups = {}
     
     for canal in lista_normalizada:
-        fp = canal["fingerprint"]
-        if fp not in canais_principais:
-            canais_principais[fp] = canal
+        chave = _chave_dedup(canal)
+        if chave not in canais_principais:
+            canais_principais[chave] = canal
             continue
             
-        canal_existente = canais_principais[fp]
+        canal_existente = canais_principais[chave]
         if canal["url"] == canal_existente["url"]:
             continue
 
         if _tem_prioridade_maior(canal, canal_existente):
-            _transformar_em_backup(canal_existente, contagem_backups, canais_finais)
-            canais_principais[fp] = canal
+            _transformar_em_backup(canal_existente, chave, contagem_backups, canais_finais)
+            canais_principais[chave] = canal
         else:
-            _transformar_em_backup(canal, contagem_backups, canais_finais)
+            _transformar_em_backup(canal, chave, contagem_backups, canais_finais)
 
     canais_finais.update(canais_principais)
     return list(canais_finais.values())
+
+def _chave_dedup(canal):
+    nome = str(canal.get("nome_base", "")).lower().replace(" ", "")
+    if canal.get("tipo") == "VOD":
+        return canal.get("fingerprint") or f"VOD|{nome}"
+    return f"TV|{nome}"
 
 def _eh_brazuka3(canal):
     return "brazuka3" in str(canal.get("source", "")).lower()
@@ -32,11 +38,10 @@ def _tem_prioridade_maior(candidato, atual):
         return False
     return candidato.get("priority", 999) < atual.get("priority", 999)
 
-def _transformar_em_backup(canal, contagem_backups, dict_finais):
-    fp_original = canal["fingerprint"]
-    contagem_backups[fp_original] = contagem_backups.get(fp_original, 0) + 1
-    idx = contagem_backups[fp_original]
-    novo_fp = f"{fp_original}_backup_{idx}"
+def _transformar_em_backup(canal, chave, contagem_backups, dict_finais):
+    contagem_backups[chave] = contagem_backups.get(chave, 0) + 1
+    idx = contagem_backups[chave]
+    novo_fp = f"{chave}_backup_{idx}"
     
     canal_backup = canal.copy()
     canal_backup["fingerprint"] = novo_fp

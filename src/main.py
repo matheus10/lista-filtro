@@ -31,6 +31,7 @@ def main():
             
     print("Deduplicando e gerando backups...")
     lista_deduplicada = deduplicar_canais(lista_bruta)
+    print(f"  {len(lista_bruta)} itens antes -> {len(lista_deduplicada)} depois da filtragem.")
     
     print("Separando TV e VOD...")
     dicionario_organizado = organizar_por_tipo(lista_deduplicada)

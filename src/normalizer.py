@@ -9,7 +9,8 @@ def normalizar_canal(canal):
     qualidade = match_qualidade.group(1).upper() if match_qualidade else "SD"
     
     nome_limpo = re.sub(r'\[.*?\]|\(.*?\)|\|.*?\|', '', nome_cru)
-    nome_limpo = re.sub(r'\b(FHD|HD|SD|4K|8K|1080p|720p|TV|Ao Vivo)\b', '', nome_limpo, flags=re.IGNORECASE)
+    nome_limpo = re.sub(r'\b(FHD|HD|SD|4K|8K|1080p|720p|TV|Ao Vivo|H265|HEVC)\b', '', nome_limpo, flags=re.IGNORECASE)
+    nome_limpo = re.sub(r'[¹²³]+', '', nome_limpo)
     nome_limpo = nome_limpo.replace('-', ' ').replace('.', ' ').strip()
     nome_limpo = " ".join(nome_limpo.split())
     
