@@ -66,8 +66,22 @@ def grupo_padrao(tipo, nome_limpo, grupo, url):
     return "Canais"
 
 
+def qualidade_chave(qualidade):
+    """Agrupa rotulos equivalentes (1080p=FHD, 2160p=4K) sem misturar HD com FHD."""
+    q = str(qualidade or "SD").upper()
+    if q in ("2160P", "4K"):
+        return "4K"
+    if q in ("1080P", "FHD"):
+        return "FHD"
+    if q in ("720P", "HD"):
+        return "HD"
+    if q == "8K":
+        return "8K"
+    return "SD"
+
+
 def qualidade_rank(qualidade):
-    return QUALIDADE_ORDEM.get(str(qualidade or "SD").upper(), 0)
+    return QUALIDADE_ORDEM.get(qualidade_chave(qualidade), 0)
 
 
 def normalizar_lista(lista_canais_parseados):
@@ -107,10 +121,11 @@ def normalizar_canal(canal):
     grupo = grupo_padrao(tipo_conteudo, nome_limpo, canal.get("group_title") or "", canal.get("url") or "")
 
     slug = _slug(nome_limpo)
+    qchave = qualidade_chave(qualidade)
     if tipo_conteudo == "VOD":
-        fingerprint = f"vod|{slug}|{ano}"
+        fingerprint = f"vod|{slug}|{ano}|{qchave}"
     else:
-        fingerprint = f"tv|{slug}"
+        fingerprint = f"tv|{slug}|{qchave}"
 
     return {
         "fingerprint": fingerprint,

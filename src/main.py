@@ -63,7 +63,7 @@ def main():
             print(f"  Falha ao baixar: {e}")
         status_fontes.append(entrada)
 
-    print("Deduplicando (URL unica, um titulo, sem backups)...")
+    print("Deduplicando (URL unica, qualidades separadas, 1 backup se outro host)...")
     lista_deduplicada, filtro_stats = deduplicar_canais(lista_bruta)
 
     resumo_validacao = {
@@ -115,6 +115,8 @@ def main():
         "bruto": filtro_stats["bruto"],
         "apos_url": filtro_stats["apos_url"],
         "apos_nome": filtro_stats["apos_nome"],
+        "principais": filtro_stats.get("principais", filtro_stats["apos_nome"]),
+        "backups": filtro_stats.get("backups", 0),
         "validacao_tv": resumo_validacao["executada"],
         "fontes": status_fontes,
     }
