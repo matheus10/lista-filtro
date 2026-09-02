@@ -1,5 +1,7 @@
 output/
+cache/
 public/*.m3u
+public/stats.json
 __pycache__/
 *.pyc
 .env

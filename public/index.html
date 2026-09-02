@@ -49,6 +49,7 @@
       .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
       .on { background: var(--ok); }
       .off { background: var(--off); }
+      .warn { background: var(--warn); }
       .err { color: var(--off); }
       a { color: #7eb8ff; }
     </style>
@@ -57,6 +58,13 @@
     <h1>Números da lista</h1>
     <p class="sub" id="quando">Carregando…</p>
     <div class="grid" id="cards"></div>
+    <h2>Servidores</h2>
+    <table>
+      <thead>
+        <tr><th>Host</th><th>Situação</th><th>Vivos</th><th>Mortos</th><th>Incertos</th></tr>
+      </thead>
+      <tbody id="hosts"></tbody>
+    </table>
     <h2>Listas-fonte</h2>
     <table>
       <thead>
@@ -72,6 +80,7 @@
     </p>
     <script>
       const fmt = (n) => Number(n || 0).toLocaleString("pt-BR");
+      const esc = (t) => String(t || "").replace(/[&<>"]/g, (s) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[s]));
       fetch("/stats.json", { cache: "no-store" })
         .then((r) => {
           if (!r.ok) throw new Error("sem stats");
@@ -81,9 +90,11 @@
           const quando = s.atualizado_em
             ? new Date(s.atualizado_em).toLocaleString("pt-BR")
             : "—";
-          const nota = s.validacao_tv
-            ? "TV com teste real. Backup só se o outro host também estiver no ar. Filmes herdam a saúde do servidor."
+          let nota = s.validacao_tv
+            ? "TV com teste em duas passagens. Backup só se o outro host também estiver no ar. Filmes: saúde do servidor + amostra."
             : "Validação de TV ainda não rodou neste deploy.";
+          if (s.abortado) nota = "Este run abortou (queda forte de TV). O Firebase não foi atualizado.";
+          if (s.probe_segundos) nota += " Probe: " + Math.round(s.probe_segundos) + "s.";
           document.getElementById("quando").textContent = "Atualizado em " + quando + " · " + nota;
           const cards = [
             ["Filmes", s.filmes],
@@ -96,15 +107,28 @@
             ["Depois (únicos)", s.apos_nome],
             ["Principais", s.principais],
             ["Backups", s.backups],
+            ["Filmes de host morto", s.vod_drop_host],
           ];
           document.getElementById("cards").innerHTML = cards
             .map(([l, n]) => '<div class="card"><div class="n">' + fmt(n) + '</div><div class="l">' + l + "</div></div>")
             .join("");
+          const sitDot = (st) => st === "saudavel" ? "on" : st === "morto" ? "off" : "warn";
+          document.getElementById("hosts").innerHTML = (s.hosts || []).length
+            ? (s.hosts || []).map((h) => {
+                const st = h.status || "incerto";
+                return (
+                  "<tr><td>" + esc(h.host) + "</td><td>" +
+                  '<span class="dot ' + sitDot(st) + '"></span>' + esc(st) +
+                  "</td><td>" + fmt(h.vivos) + "</td><td>" + fmt(h.mortos) +
+                  "</td><td>" + fmt(h.incertos) + "</td></tr>"
+                );
+              }).join("")
+            : "<tr><td colspan=\"5\">Sem dados de servidor neste deploy.</td></tr>";
           document.getElementById("fontes").innerHTML = (s.fontes || [])
             .map((f) => {
               const ok = f.online;
               return (
-                "<tr><td>" + (f.name || "") + "</td><td>" +
+                "<tr><td>" + esc(f.name) + "</td><td>" +
                 '<span class="dot ' + (ok ? "on" : "off") + '"></span>' +
                 (ok ? "online" : "offline") +
                 (f.http ? " (HTTP " + f.http + ")" : "") +

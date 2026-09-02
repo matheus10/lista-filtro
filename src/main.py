@@ -15,12 +15,7 @@ def _diretorio_saida(base_dir):
     diretorio_saida = os.environ.get("FIREBASE_PUBLIC_DIR")
     if diretorio_saida:
         return diretorio_saida
-    candidatos = [
-        r"C:\Users\racoon\Desktop\projetos\lista-iptv\public",
-        os.path.normpath(os.path.join(base_dir, "..", "..", "..", "lista-iptv", "public")),
-        os.path.join(base_dir, "..", "public"),
-    ]
-    return next((p for p in candidatos if os.path.isdir(p)), candidatos[-1])
+    return os.path.normpath(os.path.join(base_dir, "..", "public"))
 
 
 def _gravar_stats(diretorio_saida, stats):
@@ -82,9 +77,16 @@ def main():
         "backups": 0,
         "hosts_saudaveis": [],
         "hosts_mortos": [],
+        "hosts": [],
         "vod_drop_host": 0,
         "vod_backups": 0,
+        "probe_segundos": 0,
+        "cache_vivos": 0,
+        "urls_testadas": 0,
+        "vod_amostra": 0,
     }
+    abortar = False
+    abort_msg = ""
 
     if os.environ.get("VALIDATE_STREAMS", "0") == "1":
         n_tv = sum(1 for c in lista_deduplicada if c.get("tipo") != "VOD")
@@ -100,12 +102,13 @@ def main():
         depois_grupos = resumo.get("tv_grupos_depois", 0)
         max_drop = float(os.environ.get("VALIDATE_MAX_DROP_RATIO", "0.85"))
         if antes_grupos >= 100 and depois_grupos < antes_grupos * (1.0 - max_drop):
-            print(
+            abortar = True
+            abort_msg = (
                 f"ABORTADO: validacao removeu {antes_grupos - depois_grupos}/{antes_grupos} "
                 f"grupos de TV (acima de {max_drop:.0%}). Provavel bloqueio de IP do runner. "
-                "O Firebase nao sera atualizado."
+                "O Firebase nao sera atualizado; artefatos do run ficam no Actions."
             )
-            sys.exit(1)
+            print(abort_msg)
     else:
         tv, vod = _partir_tv_vod(lista_deduplicada)
         print("Sem teste de stream: 1 canal de TV por qualidade (sem backup).")
@@ -157,11 +160,21 @@ def main():
         "principais": n_principais,
         "backups": n_backups,
         "vod_drop_host": resumo_validacao["vod_drop_host"],
+        "vod_amostra": resumo_validacao.get("vod_amostra", 0),
+        "probe_segundos": resumo_validacao.get("probe_segundos", 0),
+        "cache_vivos": resumo_validacao.get("cache_vivos", 0),
+        "urls_testadas": resumo_validacao.get("urls_testadas", 0),
+        "hosts": resumo_validacao.get("hosts") or [],
+        "hosts_saudaveis": resumo_validacao.get("hosts_saudaveis") or [],
+        "hosts_mortos": resumo_validacao.get("hosts_mortos") or [],
         "validacao_tv": resumo_validacao["executada"],
+        "abortado": abortar,
         "fontes": status_fontes,
     }
     _gravar_stats(diretorio_saida, stats)
     print(f"Sobrescritos na pasta public (URLs fixas): {diretorio_saida}")
+    if abortar:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

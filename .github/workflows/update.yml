@@ -27,6 +27,14 @@ jobs:
       - name: Instalar dependências
         run: pip install -r requirements.txt
 
+      - name: Restaurar cache de vereditos
+        uses: actions/cache@v4
+        with:
+          path: cache/verdicts.json
+          key: stream-verdicts-${{ github.run_id }}
+          restore-keys: |
+            stream-verdicts-
+
       - name: Executar Pipeline ETL
         env:
           FIREBASE_PUBLIC_DIR: ${{ github.workspace }}/public
@@ -37,16 +45,32 @@ jobs:
           VALIDATE_CONCURRENCY: "30"
           VALIDATE_PER_HOST: "5"
           VALIDATE_PRECHECK_TCP: "1"
-          VALIDATE_SKIP_BACKUP_URLS: "0"
           VALIDATE_TV_ONLY: "1"
           VALIDATE_CONFIRM_DEAD: "1"
           VALIDATE_MAX_DROP_RATIO: "0.85"
+          VALIDATE_VOD_SAMPLE: "12"
+          VALIDATE_CACHE_PATH: ${{ github.workspace }}/cache/verdicts.json
+          VALIDATE_CACHE_TTL_SEC: "345600"
         run: |
+          mkdir -p cache
           cd src
           python main.py
 
+      - name: Guardar artefatos das listas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: listas-e-stats
+          path: |
+            public/lista.m3u
+            public/lista-canal.m3u
+            public/lista-filme.m3u
+            public/stats.json
+          if-no-files-found: warn
+
       # Publica no canal live: os mesmos caminhos (lista.m3u etc.) sao sobrescritos; URLs nao mudam.
       - name: Deploy no Firebase Hosting
+        if: success()
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
@@ -54,8 +78,8 @@ jobs:
           channelId: live
           projectId: minha-lista-c880d
 
-
       - name: Verificar se as listas saem como texto puro
+        if: success()
         run: |
           sleep 15
           set +e

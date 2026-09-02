@@ -38,7 +38,8 @@
     {
       "name": "Iptv-Brasil-2026-Filmes-Series",
       "url": "https://raw.githubusercontent.com/xKzin/Iptv-Brasil-2026/master/Filmes-Series.m3u8",
-      "priority": 8
+      "priority": 8,
+      "only": "VOD"
     }
   ]
 }

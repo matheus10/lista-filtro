@@ -15,11 +15,13 @@ Pre-validacao para o teste caber no tempo:
 - TCP/DNS por servidor (2s): host morto nao gasta timeout de stream.
 - Passagem rapida (3s, 8 KB): vivos saem cedo; 404 ja e candidato a remocao.
 - Teste pesado (10s, 128 KB) so no que ficou incerto na TV.
-- TV: testa todos os candidatos; principal+backup so depois, se os dois estiverem no ar.
-- VOD (filmes/series) nao e testado URL a URL: sobe filtrado pela saude do servidor na TV.
+- TV: duas passagens — primeiro o candidato principal; extra host so se faltar par ativo.
+- VOD: amostra curta por host + filtro pela saude do servidor na TV.
+- Cache de vivos recentes (TTL) evita retestar o mesmo stream a cada run.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import socket
@@ -33,7 +35,7 @@ import requests
 from requests.adapters import HTTPAdapter
 import urllib3
 
-from deduplicator import escolher_par_ativo
+from deduplicator import _chave_dedup, _eh_brazuka3, _ordem, escolher_par_ativo
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -414,6 +416,190 @@ def _deve_remover(historico: List[Verdict]) -> bool:
     return historico[-1] == "dead"
 
 
+def _url_canal(canal: dict) -> str:
+    return (canal.get("url") or "").split("#")[0].strip()
+
+
+def _grupos_tv(tv_canais: List[dict]) -> List[List[dict]]:
+    grupos = defaultdict(list)
+    for canal in tv_canais:
+        grupos[_chave_dedup(canal)].append(canal)
+    return [sorted(itens, key=_ordem) for itens in grupos.values()]
+
+
+def _carregar_cache(caminho: str, ttl_s: float) -> Dict[str, Verdict]:
+    if not caminho or not os.path.isfile(caminho):
+        return {}
+    try:
+        with open(caminho, "r", encoding="utf-8") as f:
+            bruto = json.load(f)
+    except Exception as e:
+        print(f"Cache de vereditos ignorado: {e}")
+        return {}
+    agora = time.time()
+    vivos: Dict[str, Verdict] = {}
+    itens = bruto.get("items") if isinstance(bruto, dict) else None
+    if not isinstance(itens, dict):
+        return {}
+    for url, meta in itens.items():
+        if not isinstance(meta, dict):
+            continue
+        if meta.get("verdict") != "alive":
+            continue
+        try:
+            ts = float(meta.get("ts") or 0)
+        except (TypeError, ValueError):
+            continue
+        if agora - ts <= ttl_s:
+            vivos[url] = "alive"
+    print(f"Cache: {len(vivos)} URLs vivas reaproveitadas (TTL {int(ttl_s / 3600)}h).")
+    return vivos
+
+
+def _gravar_cache(caminho: str, status: Dict[str, Verdict]) -> None:
+    if not caminho:
+        return
+    agora = time.time()
+    itens = {}
+    for url, v in status.items():
+        if v in ("alive", "dead", "uncertain"):
+            itens[url] = {"verdict": v, "ts": agora}
+    try:
+        os.makedirs(os.path.dirname(caminho) or ".", exist_ok=True)
+        with open(caminho, "w", encoding="utf-8") as f:
+            json.dump({"updated": agora, "items": itens}, f)
+        print(f"Cache gravado: {len(itens)} vereditos -> {caminho}")
+    except Exception as e:
+        print(f"Nao foi possivel gravar cache: {e}")
+
+
+def _proxima_url(grupo: List[dict], status: Dict[str, Verdict]) -> Optional[str]:
+    """Proximo candidato a testar: backup vivo de outro host, ou substituto se o principal morreu."""
+
+    def veredito(canal: dict) -> Optional[str]:
+        u = _url_canal(canal)
+        if not (u.startswith("http://") or u.startswith("https://")):
+            return "uncertain"
+        return status.get(u)
+
+    vivos = [c for c in grupo if veredito(c) == "alive"]
+    incertos = [c for c in grupo if veredito(c) == "uncertain"]
+    principal = next((c for c in vivos if _eh_brazuka3(c)), None)
+    if principal is None:
+        principal = next((c for c in incertos if _eh_brazuka3(c)), None)
+    if principal is None and vivos:
+        principal = vivos[0]
+    if principal is None and incertos:
+        principal = incertos[0]
+
+    host_p = _host(_url_canal(principal)) if principal else ""
+    tem_backup = any(
+        _host(_url_canal(c)) not in ("", host_p) for c in vivos if c is not principal
+    )
+    if principal and tem_backup:
+        return None
+
+    for cand in grupo:
+        if veredito(cand) is not None:
+            continue
+        u = _url_canal(cand)
+        if not (u.startswith("http://") or u.startswith("https://")):
+            continue
+        h = _host(u)
+        if principal and h and h == host_p:
+            continue
+        return u
+    if principal is None:
+        for cand in grupo:
+            if veredito(cand) is not None:
+                continue
+            u = _url_canal(cand)
+            if u.startswith("http://") or u.startswith("https://"):
+                return u
+    return None
+
+
+def _correr_lote(
+    urls: List[str],
+    status: Dict[str, Verdict],
+    historico: Dict[str, List[Verdict]],
+    puladas: Set[str],
+    timeout_s: float,
+    fast_timeout: float,
+    tcp_timeout: float,
+    concurrency: int,
+    per_host: int,
+    precheck_tcp: bool,
+    confirm_dead: bool,
+) -> None:
+    alvo = []
+    seen = set()
+    for u in urls:
+        if not u or u in seen or u in status:
+            continue
+        seen.add(u)
+        historico.setdefault(u, [])
+        alvo.append(u)
+    if not alvo:
+        return
+
+    if precheck_tcp:
+        endpoints_off = _precheck_endpoints(alvo, tcp_timeout)
+        for u in alvo:
+            if _endpoint(u) in endpoints_off:
+                status[u] = "uncertain"
+                historico[u].append("uncertain")
+                puladas.add(u)
+
+    restantes = [u for u in alvo if u not in puladas]
+    if restantes:
+        print("Passagem rapida...")
+        rapido = _probe_urls(restantes, fast_timeout, concurrency, per_host, quick=True)
+        for u, v in rapido.items():
+            status[u] = v
+            historico[u].append(v)
+
+    precisa_completo = [u for u in restantes if status.get(u) == "uncertain"]
+    if precisa_completo:
+        print(f"Teste real: {len(precisa_completo)} URLs ainda incertas...")
+        completo = _probe_urls(precisa_completo, timeout_s, concurrency, per_host, quick=False)
+        for u, v in completo.items():
+            status[u] = v
+            historico[u].append(v)
+
+    if confirm_dead:
+        mortos = [u for u in restantes if status.get(u) == "dead"]
+        if mortos:
+            print(f"Confirmando {len(mortos)} mortos (404/placeholder)...")
+            conf = _probe_urls(
+                mortos, fast_timeout, max(8, concurrency // 2), max(3, per_host), quick=True
+            )
+            revived = 0
+            for u, v in conf.items():
+                historico[u].append(v)
+                status[u] = v
+                if v == "alive":
+                    revived += 1
+            print(f"  Mortos que na verdade estavam vivos: {revived}")
+
+
+def _amostra_vod_urls(vod_canais: List[dict], hosts: Set[str], n: int) -> Dict[str, List[str]]:
+    por_host: Dict[str, List[str]] = defaultdict(list)
+    seen: Set[str] = set()
+    for canal in vod_canais:
+        u = _url_canal(canal)
+        if not (u.startswith("http://") or u.startswith("https://")):
+            continue
+        h = _host(u)
+        if h not in hosts or u in seen:
+            continue
+        if len(por_host[h]) >= n:
+            continue
+        seen.add(u)
+        por_host[h].append(u)
+    return por_host
+
+
 def _saude_hosts(
     http_urls: List[str],
     status: Dict[str, Verdict],
@@ -446,6 +632,7 @@ def _saude_hosts(
 
 
 def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
+    t0 = time.time()
     timeout_s = float(os.environ.get("VALIDATE_TIMEOUT_SEC", "10"))
     fast_timeout = float(os.environ.get("VALIDATE_FAST_TIMEOUT_SEC", "3"))
     tcp_timeout = float(os.environ.get("VALIDATE_TCP_TIMEOUT_SEC", "2"))
@@ -454,6 +641,9 @@ def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
     precheck_tcp = os.environ.get("VALIDATE_PRECHECK_TCP", "1") != "0"
     confirm_dead = os.environ.get("VALIDATE_CONFIRM_DEAD", "1") != "0"
     tv_only = os.environ.get("VALIDATE_TV_ONLY", "1") != "0"
+    vod_sample_n = int(os.environ.get("VALIDATE_VOD_SAMPLE", "12"))
+    cache_path = os.environ.get("VALIDATE_CACHE_PATH", "").strip()
+    cache_ttl = float(os.environ.get("VALIDATE_CACHE_TTL_SEC", str(4 * 24 * 3600)))
 
     vod_canais: List[dict] = []
     tv_canais: List[dict] = []
@@ -466,26 +656,25 @@ def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
         vod_urls = {c.get("url") for c in vod_canais if c.get("url")}
         print(
             f"VOD: {len(vod_canais)} itens / {len(vod_urls)} URLs unicas "
-            "sem teste de stream (filtro depois, por saude do host)."
+            "sem probe completo (amostra por host + saude da TV)."
         )
-        print(f"TV: {len(tv_canais)} candidatos vao para validacao real.")
+        print(f"TV: {len(tv_canais)} candidatos; probe em duas passagens.")
     else:
         tv_canais = [c for c in canais if c.get("tipo") != "VOD"]
         vod_canais = [c for c in canais if c.get("tipo") == "VOD"]
 
+    grupos = _grupos_tv(tv_canais)
     http_urls: List[str] = []
-    seen = set()
+    seen_tv = set()
     for c in tv_canais:
-        u = c.get("url") or ""
+        u = _url_canal(c)
         if not (u.startswith("http://") or u.startswith("https://")):
             continue
-        if u not in seen:
-            seen.add(u)
+        if u not in seen_tv:
+            seen_tv.add(u)
             http_urls.append(u)
 
-    print(f"TV: {len(http_urls)} URLs unicas para probe (todos os candidatos).")
-
-    resumo_vazio = {
+    resumo_base = {
         "tv_vivos": 0,
         "tv_incertos": 0,
         "tv_removidos": 0,
@@ -494,71 +683,109 @@ def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
         "backups": 0,
         "hosts_saudaveis": [],
         "hosts_mortos": [],
+        "hosts": [],
+        "cache_vivos": 0,
+        "urls_testadas": 0,
+        "probe_segundos": 0,
+        "vod_amostra": 0,
     }
 
     if not http_urls:
         print("Nenhuma URL http(s) de TV para validar.")
         tv_final, par_stats = escolher_par_ativo(tv_canais, lambda _c: "uncertain")
         n_grupos = len({c.get("fingerprint") for c in tv_canais})
-        resumo_vazio.update(
+        resumo_base.update(
             {
                 "tv_incertos": par_stats["tv_incertos"],
                 "principais": par_stats["principais"],
                 "backups": par_stats["backups"],
                 "tv_grupos_antes": n_grupos,
                 "tv_grupos_depois": par_stats["principais"],
+                "probe_segundos": round(time.time() - t0, 1),
             }
         )
-        return tv_final + vod_canais, resumo_vazio
+        return tv_final + vod_canais, resumo_base
 
     historico: Dict[str, List[Verdict]] = {u: [] for u in http_urls}
     status: Dict[str, Verdict] = {}
-
     puladas: Set[str] = set()
-    if precheck_tcp:
-        endpoints_off = _precheck_endpoints(http_urls, tcp_timeout)
-        for u in http_urls:
-            if _endpoint(u) in endpoints_off:
-                status[u] = "uncertain"
-                historico[u].append("uncertain")
-                puladas.add(u)
 
-    restantes = [u for u in http_urls if u not in puladas]
-
-    if restantes:
-        print("Passagem rapida (pre-validacao, so TV)...")
-        rapido = _probe_urls(restantes, fast_timeout, concurrency, per_host, quick=True)
-        for u, v in rapido.items():
+    cache_vivos = _carregar_cache(cache_path, cache_ttl)
+    cache_hits = 0
+    for u, v in cache_vivos.items():
+        if u in seen_tv:
             status[u] = v
-            historico[u].append(v)
+            historico.setdefault(u, []).append("alive")
+            cache_hits += 1
+    if cache_hits:
+        print(f"Cache aplicado em {cache_hits} URLs de TV (vivas, sem reteste).")
 
-    precisa_completo = [u for u in restantes if status.get(u) == "uncertain"]
-    if precisa_completo:
-        print(f"Teste real: {len(precisa_completo)} URLs de TV ainda incertas...")
-        completo = _probe_urls(precisa_completo, timeout_s, concurrency, per_host, quick=False)
-        for u, v in completo.items():
-            status[u] = v
-            historico[u].append(v)
-
-    if confirm_dead:
-        mortos = [u for u in restantes if status.get(u) == "dead"]
-        if mortos:
-            print(f"Confirmando {len(mortos)} mortos de TV (404/placeholder)...")
-            conf = _probe_urls(mortos, fast_timeout, max(8, concurrency // 2), max(3, per_host), quick=True)
-            revived = 0
-            for u, v in conf.items():
-                historico[u].append(v)
-                status[u] = v
-                if v == "alive":
-                    revived += 1
-            print(f"  Mortos que na verdade estavam vivos: {revived}")
-
-    hosts_saudaveis, hosts_mortos, hosts_bloqueados = _saude_hosts(
-        http_urls, status, puladas
+    lote_kwargs = dict(
+        status=status,
+        historico=historico,
+        puladas=puladas,
+        timeout_s=timeout_s,
+        fast_timeout=fast_timeout,
+        tcp_timeout=tcp_timeout,
+        concurrency=concurrency,
+        per_host=per_host,
+        precheck_tcp=precheck_tcp,
+        confirm_dead=confirm_dead,
     )
 
+    for rodada in range(1, 4):
+        lote: List[str] = []
+        visto = set()
+        for grupo in grupos:
+            nxt = _proxima_url(grupo, status)
+            if nxt and nxt not in visto and nxt not in status:
+                lote.append(nxt)
+                visto.add(nxt)
+        if not lote:
+            break
+        print(f"TV passagem {rodada}: {len(lote)} URLs (principal, depois backup se faltar).")
+        _correr_lote(lote, **lote_kwargs)
+
+    urls_testadas = [u for u in http_urls if u in status and u not in cache_vivos]
+    hosts_saudaveis, hosts_mortos, hosts_bloqueados = _saude_hosts(
+        [u for u in http_urls if u in status], status, puladas
+    )
+
+    vod_amostra_n = 0
+    if vod_sample_n > 0 and vod_canais and hosts_saudaveis:
+        alvos = hosts_saudaveis - hosts_mortos
+        por_host = _amostra_vod_urls(vod_canais, alvos, vod_sample_n)
+        amostra: List[str] = []
+        for urls_h in por_host.values():
+            amostra.extend(urls_h)
+        if amostra:
+            print(
+                f"Amostra VOD: {len(amostra)} URLs em {len(por_host)} hosts saudaveis "
+                f"(ate {vod_sample_n} por host)."
+            )
+            _correr_lote(amostra, **lote_kwargs)
+            vod_amostra_n = len(amostra)
+            extra_mortos: Set[str] = set()
+            falhou_tudo = True
+            min_morta = min(8, vod_sample_n)
+            for host, urls_h in por_host.items():
+                testados = [u for u in urls_h if u not in puladas]
+                vivos_h = sum(1 for u in testados if status.get(u) == "alive")
+                if vivos_h > 0:
+                    falhou_tudo = False
+                elif len(testados) >= min_morta:
+                    extra_mortos.add(host)
+            if falhou_tudo and extra_mortos:
+                print("Amostra VOD: 0 vivos em todos os hosts — ignorando (provavel IP block).")
+            elif extra_mortos:
+                print(
+                    f"Amostra VOD: hosts com filmes mortos, apesar da TV: {sorted(extra_mortos)}"
+                )
+                hosts_mortos |= extra_mortos
+                hosts_saudaveis -= extra_mortos
+
     def veredito_de(canal: dict) -> str:
-        u = canal.get("url") or ""
+        u = _url_canal(canal)
         if not (u.startswith("http://") or u.startswith("https://")):
             return "uncertain"
         if _host(u) in hosts_bloqueados:
@@ -570,12 +797,40 @@ def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
     print("Escolhendo principal + backup so entre canais ativos (hosts diferentes)...")
     tv_final, par_stats = escolher_par_ativo(tv_canais, veredito_de)
 
+    por_host_status: Dict[str, Dict[str, int]] = defaultdict(lambda: {"alive": 0, "dead": 0, "uncertain": 0})
+    for u, v in status.items():
+        h = _host(u)
+        if not h:
+            continue
+        chave = v if v in ("alive", "dead") else "uncertain"
+        por_host_status[h][chave] += 1
+    hosts_info = []
+    for h in sorted(set(list(hosts_saudaveis) + list(hosts_mortos) + list(por_host_status))):
+        cont = por_host_status[h]
+        if h in hosts_saudaveis:
+            sit = "saudavel"
+        elif h in hosts_mortos:
+            sit = "morto"
+        else:
+            sit = "incerto"
+        hosts_info.append(
+            {
+                "host": h,
+                "status": sit,
+                "vivos": cont["alive"],
+                "mortos": cont["dead"],
+                "incertos": cont["uncertain"],
+            }
+        )
+
+    _gravar_cache(cache_path, status)
+    duracao = round(time.time() - t0, 1)
     print(
-        f"Validacao TV concluida: {par_stats['tv_vivos']} vivos + "
+        f"Validacao TV concluida em {duracao:.0f}s: {par_stats['tv_vivos']} vivos + "
         f"{par_stats['tv_incertos']} mantidos sem certeza, "
         f"{par_stats['tv_removidos']} inativos removidos; "
         f"VOD candidatos={len(vod_canais)} hosts saudaveis={len(hosts_saudaveis)} "
-        f"hosts mortos={len(hosts_mortos)}."
+        f"hosts mortos={len(hosts_mortos)} amostra_vod={vod_amostra_n}."
     )
     resumo = {
         "tv_vivos": par_stats["tv_vivos"],
@@ -586,7 +841,12 @@ def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
         "backups": par_stats["backups"],
         "hosts_saudaveis": sorted(hosts_saudaveis),
         "hosts_mortos": sorted(hosts_mortos),
+        "hosts": hosts_info,
         "tv_grupos_antes": len({c.get("fingerprint") for c in tv_canais}),
         "tv_grupos_depois": par_stats["principais"],
+        "cache_vivos": cache_hits,
+        "urls_testadas": len(urls_testadas),
+        "probe_segundos": duracao,
+        "vod_amostra": vod_amostra_n,
     }
     return tv_final + vod_canais, resumo

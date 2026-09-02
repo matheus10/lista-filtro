@@ -25,6 +25,36 @@ EMOJI_RE = re.compile(
 )
 
 
+EP_RE = re.compile(r"[sS](\d{1,2})[eE](\d{1,2})")
+EP2_RE = re.compile(r"[tT](\d{1,2})\s*[eE][pP]?(\d{1,2})")
+TERMOS_TV_AO_VIVO = (
+    "canal",
+    "canais",
+    "ao vivo",
+    "aovivo",
+    "live",
+    "ppv",
+    "esporte",
+    "sport",
+    "noticia",
+    "news",
+    "24h",
+    "jornal",
+    "eventos",
+)
+
+
+def codigo_episodio(nome_cru="", grupo="", url=""):
+    texto = f"{nome_cru} {grupo} {url}"
+    m = EP_RE.search(texto)
+    if m:
+        return f"S{int(m.group(1)):02d}E{int(m.group(2)):02d}"
+    m = EP2_RE.search(texto)
+    if m:
+        return f"S{int(m.group(1)):02d}E{int(m.group(2)):02d}"
+    return ""
+
+
 def _slug(texto):
     nfkd = unicodedata.normalize("NFKD", str(texto or ""))
     sem = "".join(c for c in nfkd if not unicodedata.combining(c))
@@ -133,18 +163,28 @@ def normalizar_canal(canal):
 
     slug = _slug(nome_limpo)
     qchave = qualidade_chave(qualidade)
+    episodio = codigo_episodio(nome_cru, canal.get("group_title") or "", canal.get("url") or "")
     if tipo_conteudo == "VOD":
-        fingerprint = f"vod|{slug}|{ano}|{qchave}"
+        if episodio:
+            fingerprint = f"vod|{slug}|{ano}|{episodio}|{qchave}"
+        else:
+            fingerprint = f"vod|{slug}|{ano}|{qchave}"
+        if ano:
+            nome_exibicao = f"{nome_limpo} ({ano}) {qualidade}".strip()
+        else:
+            nome_exibicao = f"{nome_limpo} {qualidade}".strip()
     else:
         fingerprint = f"tv|{slug}|{qchave}"
+        nome_exibicao = f"{nome_limpo} {qualidade}".strip()
 
     return {
         "fingerprint": fingerprint,
         "tipo": tipo_conteudo,
         "nome_base": nome_limpo,
-        "nome_exibicao": f"{nome_limpo} {qualidade}".strip(),
+        "nome_exibicao": nome_exibicao,
         "qualidade": qualidade,
         "ano": ano,
+        "episodio": episodio,
         "url": canal["url"],
         "tvg_id": canal.get("tvg_id") or "",
         "tvg_logo": canal.get("tvg_logo") or "",
@@ -152,6 +192,18 @@ def normalizar_canal(canal):
         "source": canal.get("source") or "",
         "priority": canal.get("priority", 999),
     }
+
+
+def _parece_canal_ao_vivo(grupo, url, nome):
+    texto = f"{grupo} {nome}".lower()
+    if any(t in texto for t in ("filme", "filmes", "cinema", "movie", "movies", "vod")):
+        return False
+    if any(t in texto for t in ("série", "serie", "series", "temporada", "season")):
+        return False
+    path = (url or "").lower().split("?", 1)[0]
+    if any(p in path for p in ("/live/", "/play/", "/timeshift/")):
+        return True
+    return any(t in texto for t in TERMOS_TV_AO_VIVO)
 
 
 def classificar_tipo(nome_limpo, grupo, url, nome_cru=""):
@@ -180,12 +232,13 @@ def classificar_tipo(nome_limpo, grupo, url, nome_cru=""):
         return "VOD"
     if any(t in grupo_lower for t in termos_vod):
         return "VOD"
-    if re.search(r"\((19|20)\d{2}\)", nome_cru or nome_limpo):
-        return "VOD"
     if re.search(r"[sS]\d{2}[eE]\d{2}", nome_lower + cru_lower) or re.search(
         r"[tT]\d{1,2}\s*[eE][pP]\d{1,2}", nome_lower + cru_lower
     ):
         return "VOD"
+    if re.search(r"\((19|20)\d{2}\)", nome_cru or nome_limpo):
+        if not _parece_canal_ao_vivo(grupo, url, nome_limpo):
+            return "VOD"
     if any(t in nome_lower for t in ["filme", "série", "serie"]) and not re.search(
         r"\b(hd|sd|fhd|4k|h265)\b", nome_lower
     ):
