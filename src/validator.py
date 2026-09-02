@@ -1,14 +1,15 @@
 """
 Validacao real de streams, portada do motor do listar-iptv (linkChecker.ts).
 
-Objetivo: minimizar falso negativo (canal no ar marcado como morto).
-- GET no stream (nunca so HEAD)
-- HLS seguido ate um segmento de midia
-- Se o timeout estoura com dados fluindo, considera vivo
-- Retry em erro transitorio
-- Limite de conexoes por servidor (paineis bloqueiam flood)
-- URL unica testada uma vez
-- Segunda passagem so nos mortos antes de excluir
+Politica: falso negativo (canal no ar marcado morto) e pior do que deixar
+lixo na lista. So remove o que for morto com confirmacao.
+
+Causas reais de falso offline (e o que fazemos):
+- Canal lento: se o stream ainda entrega dados no timeout (>= 8 KB), vivo.
+  Timeout sem fluxo suficiente = incerto, nao morto.
+- Flood no mesmo painel (403/429/conexao derrubada): fila por host (nunca
+  mais que N conexoes no mesmo servidor) e 403/429 como retry/incerto.
+- So apaga depois de 2 veredictos 'dead' consecutivos (nunca 'uncertain').
 """
 from __future__ import annotations
 
@@ -16,11 +17,15 @@ import os
 import re
 import threading
 import time
-from typing import Dict, List, Optional, Set
+from collections import defaultdict
+from typing import Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 DIRECT_STREAM_MIN_BYTES = 128 * 1024
 SEGMENT_MIN_BYTES = 64 * 1024
@@ -28,14 +33,18 @@ ENDED_STREAM_MIN_BYTES = 32 * 1024
 FLOWING_STREAM_MIN_BYTES = 8 * 1024
 MANIFEST_MAX_BYTES = 1024 * 1024
 MAX_PLAYLIST_DEPTH = 3
-RETRY_DELAY_S = 0.25
-RETRYABLE_HTTP = {408, 425, 429, 500, 502, 503, 504}
+RETRY_DELAY_S = 0.35
+# 403 entra aqui: painel saturado recusa, nao e canal fora do ar.
+RETRYABLE_HTTP = {403, 408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
+HARD_DEAD_HTTP = {404, 410, 451}
 HLS_URL_RE = re.compile(r"\.m3u8(\?.*)?$", re.I)
 PLACEHOLDER_PATH_RE = re.compile(r"/(?:video/)?(?:black|blank|placeholder|null)\.ts$", re.I)
 REQUEST_HEADERS = {
     "User-Agent": "VLC/3.0.20 LibVLC/3.0.20",
     "Accept": "*/*",
 }
+
+Verdict = str  # alive | dead | retry | uncertain
 
 
 def _session() -> requests.Session:
@@ -66,7 +75,7 @@ def _has_drm(playlist: str) -> bool:
 
 
 def _extract_next_url(base_url: str, playlist: str) -> Optional[str]:
-    variants: List[tuple] = []
+    variants: List[Tuple[str, int]] = []
     pending_bw: Optional[int] = None
     first_uri: Optional[str] = None
     for raw in playlist.splitlines():
@@ -95,7 +104,14 @@ def _extract_next_url(base_url: str, playlist: str) -> Optional[str]:
     return first_uri
 
 
-def _read_stream_bytes(resp: requests.Response, min_bytes: int, deadline: float) -> str:
+def _origin(url: str) -> str:
+    p = urlparse(url)
+    if p.scheme and p.netloc:
+        return f"{p.scheme}://{p.netloc}"
+    return ""
+
+
+def _read_stream_bytes(resp: requests.Response, min_bytes: int, deadline: float) -> Verdict:
     received = 0
     try:
         for chunk in resp.iter_content(chunk_size=16 * 1024):
@@ -104,38 +120,64 @@ def _read_stream_bytes(resp: requests.Response, min_bytes: int, deadline: float)
             if received >= min_bytes:
                 return "alive"
             if time.time() >= deadline:
-                return "alive" if received >= FLOWING_STREAM_MIN_BYTES else "dead"
-        return "alive" if received >= min(ENDED_STREAM_MIN_BYTES, min_bytes) else "dead"
+                # Stream ainda fluindo quando o tempo acaba = canal lento, nao morto.
+                return "alive" if received >= FLOWING_STREAM_MIN_BYTES else "uncertain"
+        if received >= min(ENDED_STREAM_MIN_BYTES, min_bytes):
+            return "alive"
+        # Servidor fechou o corpo de proposito (vazio ou lixo curto).
+        return "dead" if received == 0 else "uncertain"
     except Exception:
-        return "alive" if received >= FLOWING_STREAM_MIN_BYTES else "dead"
+        if received >= FLOWING_STREAM_MIN_BYTES:
+            return "alive"
+        return "uncertain" if time.time() >= deadline - 0.05 else "retry"
 
 
-def _verify_url(sess: requests.Session, url: str, deadline: float, depth: int, visited: Set[str]) -> str:
+def _verify_url(
+    sess: requests.Session,
+    url: str,
+    deadline: float,
+    depth: int,
+    visited: Set[str],
+    referer: Optional[str] = None,
+) -> Verdict:
     if depth > MAX_PLAYLIST_DEPTH:
-        return "dead"
+        return "uncertain"
     remaining = deadline - time.time()
     if remaining <= 0:
-        return "dead"
+        return "uncertain"
 
     normalized = url.split("#")[0]
     if normalized in visited:
         return "dead"
     visited.add(normalized)
 
+    headers = {}
+    if referer:
+        headers["Referer"] = referer
+        origin = _origin(referer)
+        if origin:
+            headers["Origin"] = origin
+
     try:
         resp = sess.get(
             url,
             stream=True,
-            timeout=max(1.0, remaining),
+            timeout=(min(6.0, max(2.0, remaining)), max(1.0, remaining)),
             allow_redirects=True,
             verify=False,
+            headers=headers or None,
         )
     except Exception:
-        return "dead" if time.time() >= deadline - 0.05 else "retry"
+        return "uncertain" if time.time() >= deadline - 0.05 else "retry"
 
     try:
-        if resp.status_code != 200:
-            return "retry" if resp.status_code in RETRYABLE_HTTP else "dead"
+        code = resp.status_code
+        if code != 200:
+            if code in RETRYABLE_HTTP:
+                return "retry"
+            if code in HARD_DEAD_HTTP:
+                return "dead"
+            return "uncertain"
         content_type = (resp.headers.get("content-type") or "").lower()
         final_url = resp.url or url
 
@@ -152,16 +194,16 @@ def _verify_url(sess: requests.Session, url: str, deadline: float, depth: int, v
                         timed_out = True
                         break
             except Exception:
-                return "retry" if time.time() < deadline - 0.05 else "dead"
+                return "retry" if time.time() < deadline - 0.05 else "uncertain"
             manifest = buf.decode("utf-8", errors="replace")
             if not manifest.lstrip().startswith("#EXTM3U"):
-                return "retry" if timed_out else "dead"
+                return "uncertain" if timed_out else "dead"
             if _has_drm(manifest):
                 return "alive"
             nxt = _extract_next_url(final_url, manifest)
             if not nxt:
                 return "retry"
-            return _verify_url(sess, nxt, deadline, depth + 1, visited)
+            return _verify_url(sess, nxt, deadline, depth + 1, visited, referer=final_url)
 
         if content_type.startswith("text/"):
             return "dead"
@@ -178,40 +220,43 @@ def _verify_url(sess: requests.Session, url: str, deadline: float, depth: int, v
         resp.close()
 
 
-def _probe(sess: requests.Session, url: str, timeout_s: float) -> bool:
+def _probe(sess: requests.Session, url: str, timeout_s: float) -> Verdict:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
-        return True
+        return "alive"
     deadline = time.time() + timeout_s
     verdict = _verify_url(sess, url, deadline, 0, set())
     if verdict == "retry":
         time.sleep(RETRY_DELAY_S)
         verdict = _verify_url(sess, url, time.time() + timeout_s, 0, set())
-    return verdict == "alive"
+    if verdict == "retry":
+        return "uncertain"
+    return verdict
 
 
 def _host(url: str) -> str:
     try:
-        return urlparse(url).hostname or url
+        return (urlparse(url).hostname or url).lower()
     except Exception:
         return url
 
 
-def _probe_urls(urls: List[str], timeout_s: float, concurrency: int, per_host: int) -> Dict[str, bool]:
-    import queue
-    import urllib3
-
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    results: Dict[str, bool] = {}
+def _probe_urls(urls: List[str], timeout_s: float, concurrency: int, per_host: int) -> Dict[str, Verdict]:
+    """Fila por host: worker so pega URL de servidor que ainda tem vaga."""
+    results: Dict[str, Verdict] = {}
     lock = threading.Lock()
-    host_lock = threading.Lock()
-    host_sem: Dict[str, threading.Semaphore] = {}
-    work: "queue.Queue[str]" = queue.Queue()
+    queues: Dict[str, List[str]] = defaultdict(list)
     for u in urls:
-        work.put(u)
+        queues[_host(u)].append(u)
+    hosts = list(queues.keys())
+    active_by_host: Dict[str, int] = defaultdict(int)
+    remaining = [len(urls)]
+    rr = [0]
+    cond = threading.Condition()
     total = len(urls)
     done = [0]
     workers_n = max(1, min(concurrency, total or 1))
+    per_host = max(1, per_host)
     tls = threading.local()
 
     def _sess() -> requests.Session:
@@ -221,40 +266,64 @@ def _probe_urls(urls: List[str], timeout_s: float, concurrency: int, per_host: i
             tls.sess = s
         return s
 
-    def _sem(host: str) -> threading.Semaphore:
-        with host_lock:
-            sem = host_sem.get(host)
-            if sem is None:
-                sem = threading.Semaphore(per_host)
-                host_sem[host] = sem
-            return sem
+    def take_next() -> Optional[Tuple[str, str]]:
+        with cond:
+            while True:
+                if remaining[0] <= 0:
+                    return None
+                saw_pending = False
+                n = len(hosts) or 1
+                for step in range(n):
+                    host = hosts[(rr[0] + step) % n]
+                    q = queues[host]
+                    if not q:
+                        continue
+                    saw_pending = True
+                    if active_by_host[host] < per_host:
+                        rr[0] = (rr[0] + step + 1) % n
+                        remaining[0] -= 1
+                        active_by_host[host] += 1
+                        return host, q.pop(0)
+                if saw_pending:
+                    cond.wait(timeout=0.05)
+                    continue
+                return None
+
+    def release_host(host: str) -> None:
+        with cond:
+            active_by_host[host] = max(0, active_by_host[host] - 1)
+            cond.notify_all()
 
     def worker() -> None:
         sess = _sess()
         while True:
-            try:
-                u = work.get_nowait()
-            except queue.Empty:
+            nxt = take_next()
+            if nxt is None:
                 return
-            sem = _sem(_host(u))
-            sem.acquire()
+            host, u = nxt
             try:
                 try:
-                    alive = _probe(sess, u, timeout_s)
+                    verdict = _probe(sess, u, timeout_s)
                 except Exception:
-                    alive = False
+                    verdict = "uncertain"
             finally:
-                sem.release()
+                release_host(host)
             with lock:
-                results[u] = alive
+                results[u] = verdict
                 done[0] += 1
                 n = done[0]
                 if n % 200 == 0 or n == total:
-                    ok = sum(1 for v in results.values() if v)
-                    print(f"  {n}/{total} testadas | ativas={ok} inativas={n - ok}", flush=True)
+                    ok = sum(1 for v in results.values() if v == "alive")
+                    mortos = sum(1 for v in results.values() if v == "dead")
+                    inc = n - ok - mortos
+                    print(
+                        f"  {n}/{total} | vivos={ok} mortos={mortos} incertos={inc}",
+                        flush=True,
+                    )
 
     print(
-        f"Validando {total} URLs unicas (timeout={timeout_s:.0f}s, conc={workers_n}, por_servidor={per_host})...",
+        f"Validando {total} URLs unicas "
+        f"(timeout={timeout_s:.0f}s, conc={workers_n}, por_servidor={per_host}, hosts={len(hosts)})...",
         flush=True,
     )
     threads = [threading.Thread(target=worker, daemon=True) for _ in range(workers_n)]
@@ -265,13 +334,23 @@ def _probe_urls(urls: List[str], timeout_s: float, concurrency: int, per_host: i
     return results
 
 
+def _deve_remover(historico: List[Verdict]) -> bool:
+    """So remove com 2+ 'dead' e nenhum 'alive'. Incerto nunca apaga sozinho."""
+    if not historico or "alive" in historico:
+        return False
+    mortos = sum(1 for v in historico if v == "dead")
+    return mortos >= 2
+
+
 def filtrar_canais_ativos(canais: List[dict]) -> List[dict]:
-    timeout_s = float(os.environ.get("VALIDATE_TIMEOUT_SEC", "8"))
+    timeout_s = float(os.environ.get("VALIDATE_TIMEOUT_SEC", "10"))
+    confirm_timeout = float(os.environ.get("VALIDATE_CONFIRM_TIMEOUT_SEC", "12"))
     concurrency = int(os.environ.get("VALIDATE_CONCURRENCY", "30"))
     per_host = int(os.environ.get("VALIDATE_PER_HOST", "5"))
-    recheck = os.environ.get("VALIDATE_RECHECK_DEAD", "1") != "0"
+    extra_passes = int(os.environ.get("VALIDATE_CONFIRM_PASSES", "2"))
+    delay_s = float(os.environ.get("VALIDATE_RECHECK_DELAY_SEC", "3"))
 
-    http_urls = []
+    http_urls: List[str] = []
     seen = set()
     for c in canais:
         u = c.get("url") or ""
@@ -284,32 +363,81 @@ def filtrar_canais_ativos(canais: List[dict]) -> List[dict]:
         print("Nenhuma URL http(s) para validar.")
         return canais
 
+    historico: Dict[str, List[Verdict]] = {u: [] for u in http_urls}
     status = _probe_urls(http_urls, timeout_s, concurrency, per_host)
+    for u, v in status.items():
+        historico[u].append(v)
 
-    if recheck:
-        mortos = [u for u, ok in status.items() if not ok]
-        if mortos:
-            print(f"Revalidando {len(mortos)} URLs marcadas inativas (reduz falso negativo)...")
-            segunda = _probe_urls(mortos, timeout_s, max(8, concurrency // 2), max(3, per_host // 2))
-            revived = 0
-            for u, ok in segunda.items():
-                if ok:
-                    status[u] = True
-                    revived += 1
-            print(f"  Recuperados na revalidacao: {revived}")
+    pendentes = [u for u in http_urls if status.get(u) != "alive"]
+    for passagem in range(1, extra_passes + 1):
+        if not pendentes:
+            break
+        if delay_s > 0:
+            print(f"Esperando {delay_s:.0f}s antes da confirmacao {passagem}/{extra_passes}...")
+            time.sleep(delay_s)
+        # Confirmacao mais conservadora: menos pressao no painel, mais tempo.
+        conc = max(8, concurrency // 2)
+        host_lim = max(2, min(3, per_host))
+        tmo = confirm_timeout if passagem > 1 else max(timeout_s, confirm_timeout)
+        print(
+            f"Confirmacao {passagem}/{extra_passes}: {len(pendentes)} URLs "
+            f"(timeout={tmo:.0f}s, por_servidor={host_lim})..."
+        )
+        nova = _probe_urls(pendentes, tmo, conc, host_lim)
+        ainda: List[str] = []
+        revived = 0
+        for u in pendentes:
+            v = nova.get(u, "uncertain")
+            historico[u].append(v)
+            if v == "alive":
+                status[u] = "alive"
+                revived += 1
+            else:
+                status[u] = v
+                ainda.append(u)
+        print(f"  Recuperados nesta passagem: {revived}")
+        pendentes = ainda
+
+    # Host com 0 vivos e volume alto: quase certamente IP bloqueado, nao painel morto.
+    por_host: Dict[str, List[str]] = defaultdict(list)
+    for u in http_urls:
+        por_host[_host(u)].append(u)
+    hosts_bloqueados = set()
+    for host, group in por_host.items():
+        if len(group) < 15:
+            continue
+        vivos_h = sum(1 for u in group if status.get(u) == "alive")
+        if vivos_h == 0:
+            hosts_bloqueados.add(host)
+            print(
+                f"Servidor {host}: 0 vivos em {len(group)} URLs — "
+                "mantendo todos (provavel bloqueio de IP, nao lista morta)."
+            )
 
     vivos = 0
     inativos = 0
-    mantidos = []
+    mantidos_incertos = 0
+    mantidos: List[dict] = []
     for c in canais:
         u = c.get("url") or ""
         if not (u.startswith("http://") or u.startswith("https://")):
             mantidos.append(c)
             continue
-        if status.get(u, True):
+        if _host(u) in hosts_bloqueados:
             mantidos.append(c)
+            mantidos_incertos += 1
+            continue
+        if _deve_remover(historico.get(u, [])):
+            inativos += 1
+            continue
+        mantidos.append(c)
+        if status.get(u) == "alive":
             vivos += 1
         else:
-            inativos += 1
-    print(f"Validacao concluida: {vivos} ativos mantidos, {inativos} inativos removidos.")
+            mantidos_incertos += 1
+
+    print(
+        f"Validacao concluida: {vivos} vivos + {mantidos_incertos} mantidos sem certeza, "
+        f"{inativos} inativos removidos (so com 2x morto confirmado)."
+    )
     return mantidos
