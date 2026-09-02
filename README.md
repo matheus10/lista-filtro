@@ -22,4 +22,7 @@ O workflow **Atualizador de Listas IPTV (M3U)** roda a cada 6 horas e também po
 
 Os headers do Hosting ficam em `firebase.json` (`text/plain`, sem `no-store`) para o navegador não abrir player e a leitura da lista não ser cortada.
 
+Antes do deploy, o workflow **valida de verdade** se o stream abre (HLS até o segmento / dados reais no TS), com limite por servidor, retry e uma segunda passagem nos inativos para reduzir falso negativo. Só então os canais mortos saem da lista e o Firebase é atualizado.
+
+
 Fontes: IPTV-Brazuka / Brazuka2 / **Brazuka3** (prioridade nos canais ao vivo) e, de [Iptv-Brasil-2026](https://github.com/xKzin/Iptv-Brasil-2026), as listas **completas CanaisBR01–BR04** mais **Filmes-Series**.

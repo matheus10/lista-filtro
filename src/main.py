@@ -1,11 +1,13 @@
 import json
 import requests
 import os
+import sys
 from parser import parse_m3u
 from normalizer import normalizar_lista
 from deduplicator import deduplicar_canais
 from organizer import organizar_por_tipo
 from generator import exportar_listas
+from validator import filtrar_canais_ativos
 
 def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +34,20 @@ def main():
     print("Deduplicando e gerando backups...")
     lista_deduplicada = deduplicar_canais(lista_bruta)
     print(f"  {len(lista_bruta)} itens antes -> {len(lista_deduplicada)} depois da filtragem.")
+
+    if os.environ.get("VALIDATE_STREAMS", "0") == "1":
+        print("Validando streams reais (so sobe ao Firebase o que estiver no ar)...")
+        antes = len(lista_deduplicada)
+        lista_deduplicada = filtrar_canais_ativos(lista_deduplicada)
+        depois = len(lista_deduplicada)
+        max_drop = float(os.environ.get("VALIDATE_MAX_DROP_RATIO", "0.85"))
+        if antes >= 100 and depois < antes * (1.0 - max_drop):
+            print(
+                f"ABORTADO: validacao removeu {antes - depois}/{antes} itens "
+                f"(acima de {max_drop:.0%}). Provavel bloqueio de IP do runner. "
+                "O Firebase nao sera atualizado."
+            )
+            sys.exit(1)
     
     print("Separando TV e VOD...")
     dicionario_organizado = organizar_por_tipo(lista_deduplicada)

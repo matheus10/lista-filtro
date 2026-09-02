@@ -8,6 +8,7 @@ on:
 jobs:
   process_lists:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - name: Checkout do código
         uses: actions/checkout@v3
@@ -23,6 +24,12 @@ jobs:
       - name: Executar Pipeline ETL
         env:
           FIREBASE_PUBLIC_DIR: ${{ github.workspace }}/public
+          VALIDATE_STREAMS: "1"
+          VALIDATE_TIMEOUT_SEC: "8"
+          VALIDATE_CONCURRENCY: "30"
+          VALIDATE_PER_HOST: "5"
+          VALIDATE_RECHECK_DEAD: "1"
+          VALIDATE_MAX_DROP_RATIO: "0.85"
         run: |
           cd src
           python main.py
