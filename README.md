@@ -18,7 +18,7 @@ As URLs **não mudam**. Cada atualização **sobrescreve** os mesmos três arqui
 
 ## Atualização automática
 
-O workflow **Atualizador de Listas IPTV (M3U)** roda a cada 6 horas e também pode ser disparado em **Actions → Run workflow**.
+O workflow **Atualizador de Listas IPTV (M3U)** roda **a cada 4 dias** (as fontes costumam mudar em ~7 dias) e também pode ser disparado em **Actions → Run workflow**.
 
 Os headers do Hosting ficam em `firebase.json` (`text/plain`, sem `no-store`) para o navegador não abrir player e a leitura da lista não ser cortada.
 
