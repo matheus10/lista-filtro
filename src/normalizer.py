@@ -57,12 +57,17 @@ def limpar_grupo(grupo):
     return limpo
 
 
-def grupo_padrao(tipo, nome_limpo, grupo, url):
+def grupo_padrao(tipo, nome_limpo, grupo, url, qualidade="SD"):
     atual = limpar_grupo(grupo)
+    q = qualidade_chave(qualidade)
+    if tipo == "VOD":
+        base = atual if atual else ("Séries" if eh_serie(grupo, nome_limpo, url) else "Filmes")
+        tokens = re.split(r"[\s|/]+", base.upper())
+        if q and q.upper() not in tokens:
+            return f"{base} | {q}"
+        return base
     if atual:
         return atual
-    if tipo == "VOD":
-        return "Séries" if eh_serie(grupo, nome_limpo, url) else "Filmes"
     return "Canais"
 
 
@@ -118,7 +123,13 @@ def normalizar_canal(canal):
         canal.get("url") or "",
         nome_cru,
     )
-    grupo = grupo_padrao(tipo_conteudo, nome_limpo, canal.get("group_title") or "", canal.get("url") or "")
+    grupo = grupo_padrao(
+        tipo_conteudo,
+        nome_limpo,
+        canal.get("group_title") or "",
+        canal.get("url") or "",
+        qualidade,
+    )
 
     slug = _slug(nome_limpo)
     qchave = qualidade_chave(qualidade)

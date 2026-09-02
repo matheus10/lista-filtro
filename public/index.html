@@ -82,7 +82,7 @@
             ? new Date(s.atualizado_em).toLocaleString("pt-BR")
             : "—";
           const nota = s.validacao_tv
-            ? "TV com teste real de stream. Filmes/séries sem probe."
+            ? "TV com teste real. Backup só se o outro host também estiver no ar. Filmes herdam a saúde do servidor."
             : "Validação de TV ainda não rodou neste deploy.";
           document.getElementById("quando").textContent = "Atualizado em " + quando + " · " + nota;
           const cards = [

@@ -5,7 +5,7 @@ import sys
 from datetime import datetime, timezone
 from parser import parse_m3u
 from normalizer import normalizar_lista
-from deduplicator import deduplicar_canais
+from deduplicator import deduplicar_canais, escolher_par_ativo, filtrar_vod_por_saude
 from organizer import organizar_por_tipo, contar_filmes_series
 from generator import exportar_listas
 from validator import filtrar_canais_ativos
@@ -29,6 +29,12 @@ def _gravar_stats(diretorio_saida, stats):
     with open(caminho, "w", encoding="utf-8") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
     print(f"Painel: {caminho}")
+
+
+def _partir_tv_vod(lista):
+    tv = [c for c in lista if c.get("tipo") != "VOD"]
+    vod = [c for c in lista if c.get("tipo") == "VOD"]
+    return tv, vod
 
 
 def main():
@@ -63,7 +69,7 @@ def main():
             print(f"  Falha ao baixar: {e}")
         status_fontes.append(entrada)
 
-    print("Deduplicando (URL unica, qualidades separadas, 1 backup se outro host)...")
+    print("Deduplicando (URL unica, ate 3 hosts por qualidade; backup depois do teste)...")
     lista_deduplicada, filtro_stats = deduplicar_canais(lista_bruta)
 
     resumo_validacao = {
@@ -72,28 +78,61 @@ def main():
         "tv_removidos": 0,
         "vod_intactos": sum(1 for c in lista_deduplicada if c.get("tipo") == "VOD"),
         "executada": False,
+        "principais": 0,
+        "backups": 0,
+        "hosts_saudaveis": [],
+        "hosts_mortos": [],
+        "vod_drop_host": 0,
+        "vod_backups": 0,
     }
 
     if os.environ.get("VALIDATE_STREAMS", "0") == "1":
         n_tv = sum(1 for c in lista_deduplicada if c.get("tipo") != "VOD")
         n_vod = len(lista_deduplicada) - n_tv
         print(
-            f"Validando streams reais so de TV ({n_tv} itens); "
-            f"{n_vod} filmes/series sobem sem teste de stream."
+            f"Validando streams reais so de TV ({n_tv} candidatos); "
+            f"{n_vod} filmes/series sobem sem teste URL a URL."
         )
-        antes_tv = n_tv
         lista_deduplicada, resumo = filtrar_canais_ativos(lista_deduplicada)
         resumo_validacao.update(resumo)
         resumo_validacao["executada"] = True
-        depois_tv = sum(1 for c in lista_deduplicada if c.get("tipo") != "VOD")
+        antes_grupos = resumo.get("tv_grupos_antes") or n_tv
+        depois_grupos = resumo.get("tv_grupos_depois", 0)
         max_drop = float(os.environ.get("VALIDATE_MAX_DROP_RATIO", "0.85"))
-        if antes_tv >= 100 and depois_tv < antes_tv * (1.0 - max_drop):
+        if antes_grupos >= 100 and depois_grupos < antes_grupos * (1.0 - max_drop):
             print(
-                f"ABORTADO: validacao removeu {antes_tv - depois_tv}/{antes_tv} canais de TV "
-                f"(acima de {max_drop:.0%}). Provavel bloqueio de IP do runner. "
+                f"ABORTADO: validacao removeu {antes_grupos - depois_grupos}/{antes_grupos} "
+                f"grupos de TV (acima de {max_drop:.0%}). Provavel bloqueio de IP do runner. "
                 "O Firebase nao sera atualizado."
             )
             sys.exit(1)
+    else:
+        tv, vod = _partir_tv_vod(lista_deduplicada)
+        print("Sem teste de stream: 1 canal de TV por qualidade (sem backup).")
+        tv, par_stats = escolher_par_ativo(tv, lambda _c: "uncertain")
+        lista_deduplicada = tv + vod
+        resumo_validacao["principais"] = par_stats["principais"]
+        resumo_validacao["backups"] = par_stats["backups"]
+        resumo_validacao["tv_incertos"] = par_stats["tv_incertos"]
+
+    tv, vod = _partir_tv_vod(lista_deduplicada)
+    print("Filtrando filmes/series por saude do servidor (resultado da TV)...")
+    hosts_s = None if not resumo_validacao["executada"] else resumo_validacao.get("hosts_saudaveis")
+    hosts_m = None if not resumo_validacao["executada"] else resumo_validacao.get("hosts_mortos")
+    vod, vod_stats = filtrar_vod_por_saude(vod, hosts_s, hosts_m)
+    lista_deduplicada = tv + vod
+    resumo_validacao["vod_drop_host"] = vod_stats["vod_drop_host"]
+    resumo_validacao["vod_backups"] = vod_stats["vod_backups"]
+
+    n_tv_backup = sum(1 for c in tv if "(Backup)" in str(c.get("nome_exibicao") or ""))
+    tv_principais = resumo_validacao.get("principais")
+    if tv_principais is None:
+        tv_principais = len(tv) - n_tv_backup
+    tv_backups = resumo_validacao.get("backups")
+    if tv_backups is None:
+        tv_backups = n_tv_backup
+    n_principais = tv_principais + (len(vod) - vod_stats["vod_backups"])
+    n_backups = tv_backups + vod_stats["vod_backups"]
 
     print("Separando TV e VOD...")
     dicionario_organizado = organizar_por_tipo(lista_deduplicada)
@@ -114,9 +153,10 @@ def main():
         "total_na_lista": len(dicionario_organizado["completa"]),
         "bruto": filtro_stats["bruto"],
         "apos_url": filtro_stats["apos_url"],
-        "apos_nome": filtro_stats["apos_nome"],
-        "principais": filtro_stats.get("principais", filtro_stats["apos_nome"]),
-        "backups": filtro_stats.get("backups", 0),
+        "apos_nome": len(dicionario_organizado["completa"]),
+        "principais": n_principais,
+        "backups": n_backups,
+        "vod_drop_host": resumo_validacao["vod_drop_host"],
         "validacao_tv": resumo_validacao["executada"],
         "fontes": status_fontes,
     }

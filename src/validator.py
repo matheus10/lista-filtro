@@ -15,8 +15,8 @@ Pre-validacao para o teste caber no tempo:
 - TCP/DNS por servidor (2s): host morto nao gasta timeout de stream.
 - Passagem rapida (3s, 8 KB): vivos saem cedo; 404 ja e candidato a remocao.
 - Teste pesado (10s, 128 KB) so no que ficou incerto na TV.
-- Backup nao e testado se o principal ficou.
-- VOD (filmes/series) nao e testado: sobe intacto para caber no limite de 6h do GitHub Actions.
+- TV: testa todos os candidatos; principal+backup so depois, se os dois estiverem no ar.
+- VOD (filmes/series) nao e testado URL a URL: sobe filtrado pela saude do servidor na TV.
 """
 from __future__ import annotations
 
@@ -32,6 +32,8 @@ from urllib.parse import urljoin, urlparse
 import requests
 from requests.adapters import HTTPAdapter
 import urllib3
+
+from deduplicator import escolher_par_ativo
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -305,14 +307,6 @@ def _precheck_endpoints(urls: List[str], timeout: float = 2.0) -> Set[Tuple[str,
     return mortos
 
 
-def _eh_backup(canal: dict) -> bool:
-    return " (Backup" in str(canal.get("nome_exibicao") or "")
-
-
-def _familia(canal: dict) -> Tuple[str, str]:
-    return (str(canal.get("tipo") or ""), str(canal.get("nome_base") or "").lower())
-
-
 def _probe_urls(
     urls: List[str],
     timeout_s: float,
@@ -420,6 +414,37 @@ def _deve_remover(historico: List[Verdict]) -> bool:
     return historico[-1] == "dead"
 
 
+def _saude_hosts(
+    http_urls: List[str],
+    status: Dict[str, Verdict],
+    puladas: Set[str],
+) -> Tuple[Set[str], Set[str], Set[str]]:
+    """Saudavel = >=1 TV vivo. Morto = 0 vivos, so se outro host teve vivo (nao e IP block)."""
+    por_host: Dict[str, List[str]] = defaultdict(list)
+    for u in http_urls:
+        por_host[_host(u)].append(u)
+
+    vivos_por_host: Dict[str, int] = {}
+    hosts_bloqueados: Set[str] = set()
+    for host, group in por_host.items():
+        testados = [u for u in group if u not in puladas]
+        vivos_h = sum(1 for u in testados if status.get(u) == "alive")
+        vivos_por_host[host] = vivos_h
+        if len(testados) >= 15 and vivos_h == 0:
+            hosts_bloqueados.add(host)
+            print(
+                f"Servidor {host}: 0 vivos em {len(testados)} URLs de TV — "
+                "mantendo TV (provavel bloqueio de IP)."
+            )
+
+    hosts_saudaveis = {h for h, n in vivos_por_host.items() if n > 0}
+    if hosts_saudaveis:
+        hosts_mortos = {h for h, n in vivos_por_host.items() if n == 0}
+    else:
+        hosts_mortos = set()
+    return hosts_saudaveis, hosts_mortos, hosts_bloqueados
+
+
 def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
     timeout_s = float(os.environ.get("VALIDATE_TIMEOUT_SEC", "10"))
     fast_timeout = float(os.environ.get("VALIDATE_FAST_TIMEOUT_SEC", "3"))
@@ -427,7 +452,6 @@ def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
     concurrency = int(os.environ.get("VALIDATE_CONCURRENCY", "30"))
     per_host = int(os.environ.get("VALIDATE_PER_HOST", "5"))
     precheck_tcp = os.environ.get("VALIDATE_PRECHECK_TCP", "1") != "0"
-    skip_backup = os.environ.get("VALIDATE_SKIP_BACKUP_URLS", "1") != "0"
     confirm_dead = os.environ.get("VALIDATE_CONFIRM_DEAD", "1") != "0"
     tv_only = os.environ.get("VALIDATE_TV_ONLY", "1") != "0"
 
@@ -442,20 +466,16 @@ def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
         vod_urls = {c.get("url") for c in vod_canais if c.get("url")}
         print(
             f"VOD: {len(vod_canais)} itens / {len(vod_urls)} URLs unicas "
-            "mantidos sem teste de stream."
+            "sem teste de stream (filtro depois, por saude do host)."
         )
-        print(f"TV: {len(tv_canais)} itens vao para validacao real.")
-        canais_tv = tv_canais
+        print(f"TV: {len(tv_canais)} candidatos vao para validacao real.")
     else:
-        canais_tv = canais
-
-    principais = [c for c in canais_tv if not _eh_backup(c)]
-    backups = [c for c in canais_tv if _eh_backup(c)] if skip_backup else []
-    alvo = principais if skip_backup else canais_tv
+        tv_canais = [c for c in canais if c.get("tipo") != "VOD"]
+        vod_canais = [c for c in canais if c.get("tipo") == "VOD"]
 
     http_urls: List[str] = []
     seen = set()
-    for c in alvo:
+    for c in tv_canais:
         u = c.get("url") or ""
         if not (u.startswith("http://") or u.startswith("https://")):
             continue
@@ -463,26 +483,37 @@ def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
             seen.add(u)
             http_urls.append(u)
 
-    print(f"TV: {len(http_urls)} URLs unicas para probe (principais).")
+    print(f"TV: {len(http_urls)} URLs unicas para probe (todos os candidatos).")
 
     resumo_vazio = {
         "tv_vivos": 0,
         "tv_incertos": 0,
         "tv_removidos": 0,
         "vod_intactos": len(vod_canais),
+        "principais": 0,
+        "backups": 0,
+        "hosts_saudaveis": [],
+        "hosts_mortos": [],
     }
 
     if not http_urls:
         print("Nenhuma URL http(s) de TV para validar.")
-        lista = (alvo + backups + vod_canais) if tv_only else canais
-        n_tv = sum(1 for c in lista if c.get("tipo") != "VOD")
-        resumo_vazio["tv_incertos"] = n_tv
-        return lista, resumo_vazio
+        tv_final, par_stats = escolher_par_ativo(tv_canais, lambda _c: "uncertain")
+        n_grupos = len({c.get("fingerprint") for c in tv_canais})
+        resumo_vazio.update(
+            {
+                "tv_incertos": par_stats["tv_incertos"],
+                "principais": par_stats["principais"],
+                "backups": par_stats["backups"],
+                "tv_grupos_antes": n_grupos,
+                "tv_grupos_depois": par_stats["principais"],
+            }
+        )
+        return tv_final + vod_canais, resumo_vazio
 
     historico: Dict[str, List[Verdict]] = {u: [] for u in http_urls}
     status: Dict[str, Verdict] = {}
 
-    # 1) Pre-check TCP/DNS — servidor fechado nao gasta timeout de stream.
     puladas: Set[str] = set()
     if precheck_tcp:
         endpoints_off = _precheck_endpoints(http_urls, tcp_timeout)
@@ -494,7 +525,6 @@ def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
 
     restantes = [u for u in http_urls if u not in puladas]
 
-    # 2) Passagem rapida: 3s, 8 KB fluindo = vivo; 404 = morto. Sem retry.
     if restantes:
         print("Passagem rapida (pre-validacao, so TV)...")
         rapido = _probe_urls(restantes, fast_timeout, concurrency, per_host, quick=True)
@@ -502,7 +532,6 @@ def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
             status[u] = v
             historico[u].append(v)
 
-    # 3) Teste real so no que ficou incerto.
     precisa_completo = [u for u in restantes if status.get(u) == "uncertain"]
     if precisa_completo:
         print(f"Teste real: {len(precisa_completo)} URLs de TV ainda incertas...")
@@ -511,7 +540,6 @@ def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
             status[u] = v
             historico[u].append(v)
 
-    # 4) Confirma so os mortos (404 volta rapido; nao retesta timeout).
     if confirm_dead:
         mortos = [u for u in restantes if status.get(u) == "dead"]
         if mortos:
@@ -525,98 +553,40 @@ def filtrar_canais_ativos(canais: List[dict]) -> Tuple[List[dict], dict]:
                     revived += 1
             print(f"  Mortos que na verdade estavam vivos: {revived}")
 
-    # Host com 0 vivos e volume alto: IP bloqueado, nao apaga.
-    por_host: Dict[str, List[str]] = defaultdict(list)
-    for u in http_urls:
-        por_host[_host(u)].append(u)
-    hosts_bloqueados = set()
-    for host, group in por_host.items():
-        testados = [u for u in group if u not in puladas]
-        if len(testados) < 15:
-            continue
-        vivos_h = sum(1 for u in testados if status.get(u) == "alive")
-        if vivos_h == 0:
-            hosts_bloqueados.add(host)
-            print(
-                f"Servidor {host}: 0 vivos em {len(testados)} URLs de TV — "
-                "mantendo todos (provavel bloqueio de IP)."
-            )
+    hosts_saudaveis, hosts_mortos, hosts_bloqueados = _saude_hosts(
+        http_urls, status, puladas
+    )
 
-    familias_ok: Set[Tuple[str, str]] = set()
-    vivos = 0
-    inativos = 0
-    mantidos_incertos = 0
-    mantidos: List[dict] = []
-
-    def _mantem_canal(c: dict) -> str:
-        nonlocal vivos, inativos, mantidos_incertos
-        u = c.get("url") or ""
+    def veredito_de(canal: dict) -> str:
+        u = canal.get("url") or ""
         if not (u.startswith("http://") or u.startswith("https://")):
-            mantidos.append(c)
-            return "keep"
+            return "uncertain"
         if _host(u) in hosts_bloqueados:
-            mantidos.append(c)
-            mantidos_incertos += 1
-            return "keep"
+            return "uncertain"
         if _deve_remover(historico.get(u, [])):
-            inativos += 1
-            return "drop"
-        mantidos.append(c)
-        if status.get(u) == "alive":
-            vivos += 1
-        else:
-            mantidos_incertos += 1
-        return "keep"
+            return "dead"
+        return status.get(u, "uncertain")
 
-    for c in alvo:
-        if _mantem_canal(c) == "keep":
-            familias_ok.add(_familia(c))
-
-    # Backups de TV: se o principal ficou, mantem sem testar. Se o principal morreu, testa o backup.
-    if skip_backup and backups:
-        backups_para_testar: List[str] = []
-        seen_b = set(http_urls)
-        for b in backups:
-            u = b.get("url") or ""
-            if _familia(b) in familias_ok:
-                continue
-            if u.startswith("http://") or u.startswith("https://"):
-                if u not in seen_b:
-                    seen_b.add(u)
-                    backups_para_testar.append(u)
-                    historico.setdefault(u, [])
-        if backups_para_testar:
-            print(f"Principais mortos: testando {len(backups_para_testar)} URLs de backup de TV...")
-            br = _probe_urls(backups_para_testar, fast_timeout, concurrency, per_host, quick=True)
-            for u, v in br.items():
-                status[u] = v
-                historico[u].append(v)
-        for b in backups:
-            u = b.get("url") or ""
-            if _familia(b) in familias_ok:
-                mantidos.append(b)
-                continue
-            if u in http_urls or u in backups_para_testar:
-                if _host(u) in hosts_bloqueados or not _deve_remover(historico.get(u, [])):
-                    mantidos.append(b)
-                    if status.get(u) == "alive":
-                        vivos += 1
-                    else:
-                        mantidos_incertos += 1
-                else:
-                    inativos += 1
-            else:
-                mantidos.append(b)
-                mantidos_incertos += 1
+    print("Escolhendo principal + backup so entre canais ativos (hosts diferentes)...")
+    tv_final, par_stats = escolher_par_ativo(tv_canais, veredito_de)
 
     print(
-        f"Validacao TV concluida: {vivos} vivos + {mantidos_incertos} mantidos sem certeza, "
-        f"{inativos} inativos removidos; VOD intacto={len(vod_canais)}."
+        f"Validacao TV concluida: {par_stats['tv_vivos']} vivos + "
+        f"{par_stats['tv_incertos']} mantidos sem certeza, "
+        f"{par_stats['tv_removidos']} inativos removidos; "
+        f"VOD candidatos={len(vod_canais)} hosts saudaveis={len(hosts_saudaveis)} "
+        f"hosts mortos={len(hosts_mortos)}."
     )
     resumo = {
-        "tv_vivos": vivos,
-        "tv_incertos": mantidos_incertos,
-        "tv_removidos": inativos,
+        "tv_vivos": par_stats["tv_vivos"],
+        "tv_incertos": par_stats["tv_incertos"],
+        "tv_removidos": par_stats["tv_removidos"],
         "vod_intactos": len(vod_canais),
+        "principais": par_stats["principais"],
+        "backups": par_stats["backups"],
+        "hosts_saudaveis": sorted(hosts_saudaveis),
+        "hosts_mortos": sorted(hosts_mortos),
+        "tv_grupos_antes": len({c.get("fingerprint") for c in tv_canais}),
+        "tv_grupos_depois": par_stats["principais"],
     }
-    return mantidos + vod_canais, resumo
+    return tv_final + vod_canais, resumo
