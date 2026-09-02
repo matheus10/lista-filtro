@@ -22,4 +22,4 @@ O workflow **Atualizador de Listas IPTV (M3U)** roda a cada 6 horas e também po
 
 Os headers do Hosting ficam em `firebase.json` (`text/plain`, sem `no-store`) para o navegador não abrir player e a leitura da lista não ser cortada.
 
-Fontes: IPTV-Brazuka / Brazuka2 / **Brazuka3** (prioridade nos canais ao vivo) e, de [Iptv-Brasil-2026](https://github.com/xKzin/Iptv-Brasil-2026), só **CanaisBR01–BR04** filtrados para **filmes e séries**.
+Fontes: IPTV-Brazuka / Brazuka2 / **Brazuka3** (prioridade nos canais ao vivo) e, de [Iptv-Brasil-2026](https://github.com/xKzin/Iptv-Brasil-2026), as listas **completas CanaisBR01–BR04** mais **Filmes-Series**.

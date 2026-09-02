@@ -18,7 +18,7 @@ def main():
     
     for fonte in fontes:
         print(f"Baixando: {fonte['name']}...")
-        resposta = requests.get(fonte['url'], timeout=120)
+        resposta = requests.get(fonte['url'], timeout=300)
         if resposta.status_code != 200:
             print(f"  Falha HTTP {resposta.status_code}, ignorando.")
             continue
