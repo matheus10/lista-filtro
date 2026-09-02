@@ -92,6 +92,8 @@
             ["TV removida", s.tv_removidos],
             ["TV sem certeza", s.tv_incertos],
             ["Total na lista", s.total_na_lista],
+            ["Antes do filtro", s.bruto],
+            ["Depois (únicos)", s.apos_nome],
           ];
           document.getElementById("cards").innerHTML = cards
             .map(([l, n]) => '<div class="card"><div class="n">' + fmt(n) + '</div><div class="l">' + l + "</div></div>")

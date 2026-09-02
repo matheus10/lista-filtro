@@ -14,7 +14,9 @@ def gerar_arquivo_m3u(lista_canais, caminho_saida):
         for canal in lista_canais:
             tvg_id = f' tvg-id="{canal["tvg_id"]}"' if canal.get("tvg_id") else ''
             tvg_logo = f' tvg-logo="{canal["tvg_logo"]}"' if canal.get("tvg_logo") else ''
-            group_title = f' group-title="{canal["group_title"]}"' if canal.get("group_title") else ''
+            grupo = canal.get("group_title") or ("Filmes" if canal.get("tipo") == "VOD" else "Canais")
+            grupo = str(grupo).replace('"', "'")
+            group_title = f' group-title="{grupo}"'
             linha_extinf = f'#EXTINF:-1{tvg_id}{tvg_logo}{group_title}, {canal["nome_exibicao"]}\n'
             f.write(linha_extinf)
             f.write(f'{canal["url"]}\n')

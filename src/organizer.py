@@ -1,4 +1,5 @@
-import re
+from normalizer import eh_serie
+
 
 def organizar_por_tipo(lista_deduplicada):
     canais_tv = []
@@ -25,11 +26,7 @@ def contar_filmes_series(canais_vod):
     filmes = 0
     series = 0
     for canal in canais_vod:
-        texto = f"{canal.get('group_title', '')} {canal.get('nome_exibicao', '')} {canal.get('nome_base', '')}".lower()
-        eh_serie = bool(re.search(r"[sS]\d{2}[eE]\d{2}", texto)) or any(
-            t in texto for t in ("série", "serie", "season", "temporada")
-        )
-        if eh_serie:
+        if eh_serie(canal):
             series += 1
         else:
             filmes += 1

@@ -63,9 +63,8 @@ def main():
             print(f"  Falha ao baixar: {e}")
         status_fontes.append(entrada)
 
-    print("Deduplicando e gerando backups...")
-    lista_deduplicada = deduplicar_canais(lista_bruta)
-    print(f"  {len(lista_bruta)} itens antes -> {len(lista_deduplicada)} depois da filtragem.")
+    print("Deduplicando (URL unica, um titulo, sem backups)...")
+    lista_deduplicada, filtro_stats = deduplicar_canais(lista_bruta)
 
     resumo_validacao = {
         "tv_vivos": sum(1 for c in lista_deduplicada if c.get("tipo") != "VOD"),
@@ -113,6 +112,9 @@ def main():
         "tv_na_lista": len(dicionario_organizado["tv"]),
         "vod_na_lista": len(dicionario_organizado["vod"]),
         "total_na_lista": len(dicionario_organizado["completa"]),
+        "bruto": filtro_stats["bruto"],
+        "apos_url": filtro_stats["apos_url"],
+        "apos_nome": filtro_stats["apos_nome"],
         "validacao_tv": resumo_validacao["executada"],
         "fontes": status_fontes,
     }
