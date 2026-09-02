@@ -1,7 +1,6 @@
 import json
 import requests
 import os
-from supabase import create_client, Client
 from parser import parse_m3u
 from normalizer import normalizar_lista
 from deduplicator import deduplicar_canais
@@ -35,26 +34,7 @@ def main():
     
     diretorio_saida = os.path.join(base_dir, "..", "output")
     exportar_listas(dicionario_organizado, diretorio_saida)
-    
-    supabase_url = os.environ.get("SUPABASE_URL")
-    supabase_key = os.environ.get("SUPABASE_KEY")
-    
-    if supabase_url and supabase_key:
-        print("Fazendo upload para o Supabase (bucket 'public')...")
-        supabase: Client = create_client(supabase_url, supabase_key)
-        
-        arquivos = ["lista-canal.m3u", "lista-filme.m3u", "lista.m3u"]
-        for arquivo in arquivos:
-            caminho_local = os.path.join(diretorio_saida, arquivo)
-            with open(caminho_local, "rb") as f:
-                supabase.storage.from_("public").upload(
-                    file=f,
-                    path=arquivo,
-                    file_options={"x-upsert": "true", "content-type": "audio/x-mpegurl"}
-                )
-        print("Deploy finalizado com sucesso!")
-    else:
-        print("Credenciais do Supabase não encontradas. Arquivos gerados apenas localmente.")
+    print("Arquivos prontos para o deploy no Firebase Hosting.")
 
 if __name__ == "__main__":
     main()

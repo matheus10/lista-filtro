@@ -21,9 +21,19 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Executar Pipeline ETL
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
           cd src
           python main.py
+
+      - name: Copiar listas para o Hosting
+        run: |
+          mkdir -p public
+          cp output/*.m3u public/
+
+      - name: Deploy no Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          channelId: live
+          projectId: minha-lista-c880d
