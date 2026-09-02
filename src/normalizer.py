@@ -41,6 +41,9 @@ def classificar_tipo(nome_limpo, grupo, url):
     termos_vod = ['filme', 'série', 'serie', 'cinema', 'vod', 'lançamento', 'netflix', 'amazon', 'disney']
     
     if any(t in grupo_lower for t in termos_vod): return "VOD"
+    if re.search(r'\((19|20)\d{2}\)', nome_limpo): return "VOD"
     if re.search(r'[sS]\d{2}[eE]\d{2}', nome_lower) or re.search(r'[tT]\d{1,2}\s*[eE][pP]\d{1,2}', nome_lower): return "VOD"
     if url_lower.endswith(('.mp4', '.mkv', '.avi', '.rmvb')): return "VOD"
+    if any(t in nome_lower for t in ['filme', 'série', 'serie']) and not re.search(r'\b(hd|sd|fhd|4k|h265)\b', nome_lower):
+        return "VOD"
     return "TV"

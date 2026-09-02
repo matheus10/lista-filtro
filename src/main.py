@@ -18,16 +18,19 @@ def main():
     
     for fonte in fontes:
         print(f"Baixando: {fonte['name']}...")
-        resposta = requests.get(fonte['url'])
-        if resposta.status_code == 200:
-            canais = parse_m3u(resposta.text, fonte['name'], fonte['priority'])
-            lista_bruta.extend(canais)
+        resposta = requests.get(fonte['url'], timeout=120)
+        if resposta.status_code != 200:
+            print(f"  Falha HTTP {resposta.status_code}, ignorando.")
+            continue
+        canais = parse_m3u(resposta.text, fonte['name'], fonte['priority'])
+        canais = normalizar_lista(canais)
+        if fonte.get("only") == "VOD":
+            canais = [c for c in canais if c.get("tipo") == "VOD"]
+            print(f"  Mantidos {len(canais)} itens de filmes/series.")
+        lista_bruta.extend(canais)
             
-    print("Normalizando nomes e extraindo resoluções...")
-    lista_normalizada = normalizar_lista(lista_bruta)
-    
     print("Deduplicando e gerando backups...")
-    lista_deduplicada = deduplicar_canais(lista_normalizada)
+    lista_deduplicada = deduplicar_canais(lista_bruta)
     
     print("Separando TV e VOD...")
     dicionario_organizado = organizar_por_tipo(lista_deduplicada)

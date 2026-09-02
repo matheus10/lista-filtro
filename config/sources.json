@@ -14,6 +14,30 @@
       "name": "IPTV-Brazuka2",
       "url": "https://raw.githubusercontent.com/xKzin/IPTV-Brazuka/main/IPTV-Brazuka2.m3u",
       "priority": 3
+    },
+    {
+      "name": "Iptv-Brasil-2026-BR01",
+      "url": "https://raw.githubusercontent.com/xKzin/Iptv-Brasil-2026/master/CanaisBR01.m3u8",
+      "priority": 4,
+      "only": "VOD"
+    },
+    {
+      "name": "Iptv-Brasil-2026-BR02",
+      "url": "https://raw.githubusercontent.com/xKzin/Iptv-Brasil-2026/master/CanaisBR02.m3u8",
+      "priority": 5,
+      "only": "VOD"
+    },
+    {
+      "name": "Iptv-Brasil-2026-BR03",
+      "url": "https://raw.githubusercontent.com/xKzin/Iptv-Brasil-2026/master/CanaisBR03.m3u8",
+      "priority": 6,
+      "only": "VOD"
+    },
+    {
+      "name": "Iptv-Brasil-2026-BR04",
+      "url": "https://raw.githubusercontent.com/xKzin/Iptv-Brasil-2026/master/CanaisBR04.m3u8",
+      "priority": 7,
+      "only": "VOD"
     }
   ]
 }
