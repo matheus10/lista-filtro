@@ -38,7 +38,7 @@ jobs:
           VALIDATE_PER_HOST: "5"
           VALIDATE_PRECHECK_TCP: "1"
           VALIDATE_SKIP_BACKUP_URLS: "1"
-          VALIDATE_VOD_FAST_ONLY: "1"
+          VALIDATE_TV_ONLY: "1"
           VALIDATE_CONFIRM_DEAD: "1"
           VALIDATE_MAX_DROP_RATIO: "0.85"
         run: |

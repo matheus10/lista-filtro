@@ -36,14 +36,19 @@ def main():
     print(f"  {len(lista_bruta)} itens antes -> {len(lista_deduplicada)} depois da filtragem.")
 
     if os.environ.get("VALIDATE_STREAMS", "0") == "1":
-        print("Validando streams reais (so sobe ao Firebase o que estiver no ar)...")
-        antes = len(lista_deduplicada)
+        n_tv = sum(1 for c in lista_deduplicada if c.get("tipo") != "VOD")
+        n_vod = len(lista_deduplicada) - n_tv
+        print(
+            f"Validando streams reais so de TV ({n_tv} itens); "
+            f"{n_vod} filmes/series sobem sem teste de stream."
+        )
+        antes_tv = n_tv
         lista_deduplicada = filtrar_canais_ativos(lista_deduplicada)
-        depois = len(lista_deduplicada)
+        depois_tv = sum(1 for c in lista_deduplicada if c.get("tipo") != "VOD")
         max_drop = float(os.environ.get("VALIDATE_MAX_DROP_RATIO", "0.85"))
-        if antes >= 100 and depois < antes * (1.0 - max_drop):
+        if antes_tv >= 100 and depois_tv < antes_tv * (1.0 - max_drop):
             print(
-                f"ABORTADO: validacao removeu {antes - depois}/{antes} itens "
+                f"ABORTADO: validacao removeu {antes_tv - depois_tv}/{antes_tv} canais de TV "
                 f"(acima de {max_drop:.0%}). Provavel bloqueio de IP do runner. "
                 "O Firebase nao sera atualizado."
             )
