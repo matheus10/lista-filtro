@@ -32,9 +32,17 @@ def main():
     print("Separando TV e VOD...")
     dicionario_organizado = organizar_por_tipo(lista_deduplicada)
     
-    diretorio_saida = os.path.join(base_dir, "..", "output")
+    diretorio_saida = os.environ.get("FIREBASE_PUBLIC_DIR")
+    if not diretorio_saida:
+        candidatos = [
+            r"C:\Users\racoon\Desktop\projetos\lista-iptv\public",
+            os.path.normpath(os.path.join(base_dir, "..", "..", "..", "lista-iptv", "public")),
+            os.path.join(base_dir, "..", "public"),
+        ]
+        diretorio_saida = next((p for p in candidatos if os.path.isdir(p)), candidatos[-1])
+
     exportar_listas(dicionario_organizado, diretorio_saida)
-    print("Arquivos prontos para o deploy no Firebase Hosting.")
+    print(f"Arquivos gravados na pasta public do Hosting: {diretorio_saida}")
 
 if __name__ == "__main__":
     main()

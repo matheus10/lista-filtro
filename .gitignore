@@ -1,4 +1,5 @@
 output/
+public/*.m3u
 __pycache__/
 *.pyc
 .env
