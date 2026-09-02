@@ -12,11 +12,15 @@
         "headers": [
           {
             "key": "Content-Type",
-            "value": "application/x-mpegURL"
+            "value": "text/plain; charset=utf-8"
           },
           {
             "key": "Content-Disposition",
             "value": "inline"
+          },
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
           },
           {
             "key": "Access-Control-Allow-Origin",
@@ -24,7 +28,7 @@
           },
           {
             "key": "Cache-Control",
-            "value": "no-cache, no-store"
+            "value": "no-cache"
           }
         ]
       }
